@@ -22,23 +22,15 @@ def process_data(file_bytes):
         start_col = header_row.index("Result") 
         block_size = 11 if "EMF1" in header_row else 8
         
-        # Identify the Module column index within a block dynamically
-        # It's usually 'Module' or 'AU'
         block_template = header_row[start_col : start_col + block_size]
-        module_sub_idx = -1
-        for i, h in enumerate(block_template):
-            if h in ["Module", "AU", "Unit_ID"]:
-                module_sub_idx = i
-                break
+        module_sub_idx = next((i for i, h in enumerate(block_template) if h in ["Module", "AU", "Unit_ID"]), -1)
 
         fixed_before = header_row[:draw_idx + 1]
         comment_cols = header_row[draw_idx + 1 : cup_idx]
         fixed_after = header_row[cup_idx : start_col]
         
-        # Standardize the block headers for the final DataFrame
         standard_block_headers = list(block_template)
-        if module_sub_idx != -1:
-            standard_block_headers[module_sub_idx] = "Module" # Force name to 'Module' for logic
+        if module_sub_idx != -1: standard_block_headers[module_sub_idx] = "Module"
         
         final_headers = fixed_before + comment_cols + fixed_after + ["ACN code", "Parameter"] + standard_block_headers
         
@@ -49,9 +41,7 @@ def process_data(file_bytes):
                 for row_vals in raw_data[2:]:
                     if len(row_vals) > col and any(val.strip() for val in row_vals[col:col+block_size]):
                         payload = row_vals[:draw_idx+1] + row_vals[draw_idx+1:cup_idx] + row_vals[cup_idx:start_col] + [acn, param] + row_vals[col:col+block_size]
-                        # Ensure row matches header length
-                        if len(payload) == len(final_headers):
-                            blocks.append(payload)
+                        if len(payload) == len(final_headers): blocks.append(payload)
         
         df = pd.DataFrame(blocks, columns=final_headers)
         df['Arrived_Date_Time'] = pd.to_datetime(df['Arrived_Date_Time'], errors='coerce')
@@ -63,10 +53,9 @@ def process_data(file_bytes):
             if col in df.columns: df[col] = df[col].astype(str).map(mappings[col]).fillna(df[col])
         return df
     except Exception as e:
-        st.error(f"Processing Error: {e}")
-        return None
+        st.error(f"Processing Error: {e}"); return None
 
-# --- Sidebar UI ---
+# --- Sidebar ---
 with st.sidebar:
     st.title("💡 converterPRO")
     uploaded_file = st.file_uploader("Upload Instrument CSV", type=["csv"])
@@ -76,78 +65,81 @@ with st.sidebar:
             st.markdown("---")
             min_date, max_date = raw_df['Arrived_Date_Time'].min().date(), raw_df['Arrived_Date_Time'].max().date()
             sel_range = st.date_input("Date Range", [min_date, max_date])
-            categories = raw_df['Discrimination'].unique().tolist()
-            sel_cats = st.multiselect("Data Categories", categories, default=categories)
-
+            sel_cats = st.multiselect("Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
     st.sidebar.markdown("---")
-    st.sidebar.caption("⚙️ **Engine Details**")
-    st.sidebar.markdown("- **Adaptive Engine:** v3.5\n- **Compatibility:** cobas pro (Dynamic Mapping)\n- **Copyright:** LabMesh.com")
+    st.sidebar.markdown("© 2026 **LabMesh.com** | v3.6")
 
-# --- Main App Area ---
+# --- Main App ---
 if uploaded_file and raw_df is not None:
     mask = (raw_df['Arrived_Date_Time'].dt.date >= sel_range[0]) & (raw_df['Arrived_Date_Time'].dt.date <= sel_range[1]) & (raw_df['Discrimination'].isin(sel_cats))
     df = raw_df.loc[mask]
 
-    tab_data, tab_analytics, tab_qc = st.tabs(["📄 Data View", "📊 Test Analytics", "🧪 Quality Control"])
+    tab_data, tab_analytics, tab_qc = st.tabs(["📄 Raw Data", "📊 Test Analytics", "🧪 Quality Control"])
     
+    with tab_data:
+        st.subheader("Raw Data Table")
+        st.dataframe(df, use_container_width=True) # RESTORED TABLE
+        st.download_button("📥 Download Full CSV", df.to_csv(index=False), "raw_export.csv")
+
     with tab_analytics:
-        st.subheader("Instrument & Module Utilization")
-        
+        st.subheader("Module Peak Utilization")
         if 'Module' in df.columns:
-            throughput_map = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
-            m_counts = df['Module'].value_counts().reset_index()
-            m_counts.columns = ['Module_Name', 'Test_Count']
+            # Capacity Mapping (Max, Practical)
+            caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
             
-            cols = st.columns(len(m_counts))
-            for i, row in m_counts.iterrows():
-                m_name = str(row['Module_Name'])
-                count = row['Test_Count']
-                m_type = next((k for k in throughput_map if k in m_name), None)
-                
-                if m_type:
-                    t_max, t_prac = throughput_map[m_type]
-                    util = (count / t_prac) * 100
-                    cols[i].metric(f"Module: {m_name}", f"{count} Tests", f"{util:.1f}% Capacity", delta_color="inverse")
+            # 1. Normalize Module Names (Group e801-1, e801-2 into e 801)
+            util_df = df.copy()
+            util_df['Normalized_Module'] = util_df['Module'].apply(lambda x: next((k for k in caps if k in str(x)), "Other"))
+            util_df['Hour'] = util_df['Arrived_Date_Time'].dt.hour
+            util_df['Date'] = util_df['Arrived_Date_Time'].dt.date
+
+            # 2. Calculate tests per hour per module
+            hourly_util = util_df.groupby(['Date', 'Hour', 'Normalized_Module']).size().reset_index(name='Tests')
+            
+            cols = st.columns(len(caps))
+            for idx, (m_type, values) in enumerate(caps.items()):
+                m_max, m_prac = values
+                # Get the peak hour across all days
+                m_data = hourly_util[hourly_util['Normalized_Module'] == m_type]
+                if not m_data.empty:
+                    peak_val = m_data['Tests'].max()
+                    util_pct = (peak_val / m_prac) * 100
+                    cols[idx].metric(f"{m_type} Peak", f"{peak_val} T/Hr", f"{util_pct:.1f}% of Practical")
+                    cols[idx].caption(f"Max: {m_max} | Practical: {m_prac}")
                 else:
-                    cols[i].metric(f"Module: {m_name}", f"{count} Tests")
-        else:
-            st.warning("Module column not detected in this software version. Utilization widgets disabled.")
+                    cols[idx].metric(f"{m_type} Peak", "0 T/Hr", "No Data")
 
         st.markdown("---")
-        # Arrival Patterns
-        st.write("#### 🕒 24-Hour Sample Arrival Pattern")
+        st.write("#### 🕒 24-Hour Arrival Pattern (Patient Samples)")
         p_df = df[df['Discrimination'].str.contains("Patient", na=False)].copy()
         if not p_df.empty:
             p_df['Hour'] = p_df['Arrived_Date_Time'].dt.hour
             p_df['Date'] = p_df['Arrived_Date_Time'].dt.strftime('%Y-%m-%d')
-            h_counts = p_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Sample Count')
-            fig = px.line(h_counts, x='Hour', y='Sample Count', color='Date', markers=True, text='Sample Count')
+            h_counts = p_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Samples')
+            fig = px.line(h_counts, x='Hour', y='Samples', color='Date', markers=True, text='Samples')
             fig.update_layout(xaxis=dict(tickmode='linear', range=[0, 23]))
             st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("---")
         c1, c2 = st.columns(2)
         with c1:
-            st.write("#### 🧪 Test Volume by Parameter")
-            st.plotly_chart(px.bar(df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', color='Parameter'), use_container_width=True)
+            st.plotly_chart(px.bar(df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', title="Test Volume"), use_container_width=True)
         with c2:
-            st.write("#### 🚻 Gender Distribution")
-            st.plotly_chart(px.pie(df, names='Gender', hole=0.4), use_container_width=True)
+            st.plotly_chart(px.pie(df, names='Gender', hole=0.4, title="Demographics"), use_container_width=True)
 
     with tab_qc:
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
-            st.write("#### 🕒 QC Run Matrix (24-Hour Scale)")
+            st.write("#### 🕒 QC Execution Timeline")
             q_df['HourFloat'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
             fig_qc = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter')
             fig_qc.update_layout(xaxis=dict(tickmode='linear', range=[0, 24]))
             st.plotly_chart(fig_qc, use_container_width=True)
             
-            st.write("#### 📋 QC Precision Statistics")
+            st.write("#### 📋 Precision Table")
             q_df['Date'] = q_df['Arrived_Date_Time'].dt.date
             qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(Runs='count', Mean='mean', SD='std').reset_index()
             qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2).map("{:.2f}%".format)
             st.dataframe(qc_stats, use_container_width=True)
 else:
     st.title("Welcome to converterPRO")
-    st.info("Ready for analysis. Please upload your CSV file.")
+    st.info("System Ready. Please upload a file in the sidebar.")
