@@ -18,7 +18,6 @@ def process_data(file_bytes):
     row0, header_row = raw_data[0], raw_data[1]
 
     try:
-        # Dynamic indexing to support different SW versions
         draw_idx = header_row.index("Drawing_Date_Time")
         cup_idx = header_row.index("Sample_Cup")
         start_col = header_row.index("Result") 
@@ -60,73 +59,93 @@ with st.sidebar:
     st.markdown("### 📁 Data Upload")
     uploaded_file = st.file_uploader("Upload Instrument CSV", type=["csv"])
     
-    st.markdown("---")
-    st.subheader("⚙️ Session Details")
-    st.write("**System:** Adaptive Engine v3.1")
-    st.write("**Compatibility:** cobas pro (All SW Versions)")
-    
     if uploaded_file:
-        st.success("File uploaded successfully!")
-        if st.button("Clear Session"):
-            st.rerun()
+        raw_df = process_data(uploaded_file.getvalue())
+        if raw_df is not None:
+            st.markdown("---")
+            st.subheader("📅 Filters")
+            min_date = raw_df['Arrived_Date_Time'].min().date()
+            max_date = raw_df['Arrived_Date_Time'].max().date()
+            sel_range = st.date_input("Date Range", [min_date, max_date])
+            
+            # Global toggle for Routine vs STAT vs QC
+            categories = raw_df['Discrimination'].unique().tolist()
+            sel_cats = st.multiselect("Visible Categories", categories, default=categories)
 
 # --- Main App Area ---
-if uploaded_file:
-    df_raw = process_data(uploaded_file.getvalue())
+if uploaded_file and raw_df is not None:
+    # Filter Data
+    mask = (raw_df['Arrived_Date_Time'].dt.date >= sel_range[0]) & \
+           (raw_df['Arrived_Date_Time'].dt.date <= sel_range[1]) & \
+           (raw_df['Discrimination'].isin(sel_cats))
+    df = raw_df.loc[mask]
+
+    # TAB STRUCTURE
+    tab_data, tab_analytics, tab_qc = st.tabs(["📄 Data View", "📊 Test Analytics", "🧪 Quality Control"])
     
-    if df_raw is not None:
-        # Active Sidebar Filters
-        with st.sidebar:
-            st.markdown("---")
-            st.subheader("📅 Data Filters")
-            min_date = df_raw['Arrived_Date_Time'].min().date()
-            max_date = df_raw['Arrived_Date_Time'].max().date()
-            sel_range = st.date_input("Filter by Date", [min_date, max_date])
+    with tab_data:
+        st.subheader("Filtered Instrument Data")
+        st.dataframe(df, use_container_width=True)
+        st.download_button("📥 Export CSV", df.to_csv(index=False), "converted_data.csv")
             
-            categories = df_raw['Discrimination'].unique().tolist()
-            sel_cats = st.multiselect("Data Categories", categories, default=categories)
-
-        # Apply Filters
-        mask = (df_raw['Arrived_Date_Time'].dt.date >= sel_range[0]) & \
-               (df_raw['Arrived_Date_Time'].dt.date <= sel_range[1]) & \
-               (df_raw['Discrimination'].isin(sel_cats))
-        df = df_raw.loc[mask]
-
-        tab1, tab2 = st.tabs(["📄 Raw Data View", "📊 Analytics Dashboard"])
+    with tab_analytics:
+        st.subheader("Instrument Workload Analytics")
+        p_df = df[df['Discrimination'].str.contains("Patient", na=False)]
         
-        with tab1:
-            st.dataframe(df, use_container_width=True)
-            st.download_button("📥 Download Filtered Data", df.to_csv(index=False), "processed_data.csv")
+        # 24-Hour Arrival Pattern (Multiple Days)
+        if not p_df.empty:
+            st.write("#### 🕒 24-Hour Sample Arrival Pattern")
+            # Prepare data for line chart
+            pattern_df = p_df.copy()
+            pattern_df['Hour'] = pattern_df['Arrived_Date_Time'].dt.hour
+            pattern_df['Date'] = pattern_df['Arrived_Date_Time'].dt.strftime('%Y-%m-%d')
             
-        with tab2:
-            st.subheader("Performance KPIs")
-            k1, k2, k3 = st.columns(3)
-            p_df = df[df['Discrimination'].str.contains("Patient", na=False)]
-            q_df = df[df['Discrimination'].str.contains("QC", na=False)]
+            # Group by Date and Hour to count unique Sample_IDs
+            hourly_counts = pattern_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Sample Count')
             
-            k1.metric("Total Rows", len(df))
-            k2.metric("Patient Records", len(p_df))
-            k3.metric("QC Samples", len(q_df))
+            fig_trend = px.line(hourly_counts, x='Hour', y='Sample Count', color='Date',
+                                markers=True, line_shape='spline',
+                                labels={'Hour': 'Hour of Day (0-23)', 'Sample Count': 'Number of Samples'},
+                                title="Arrival Volume by Hour")
+            fig_trend.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1))
+            st.plotly_chart(fig_trend, use_container_width=True)
             
+            # Distribution of Tests
+            st.markdown("---")
             c1, c2 = st.columns(2)
             with c1:
-                st.plotly_chart(px.bar(p_df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', title="Test Volume"), use_container_width=True)
+                st.write("#### 🧪 Test Volume by Parameter")
+                st.plotly_chart(px.bar(p_df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', color='Parameter'), use_container_width=True)
             with c2:
-                st.plotly_chart(px.box(q_df, x='Parameter', y='Result_Numeric', title="QC Stability"), use_container_width=True)
+                st.write("#### 🚻 Gender Distribution")
+                st.plotly_chart(px.pie(p_df, names='Gender', hole=0.4), use_container_width=True)
+        else:
+            st.warning("No Patient data available for the selected filters.")
+
+    with tab_qc:
+        st.subheader("Quality Control Monitoring")
+        q_df = df[df['Discrimination'].str.contains("QC", na=False)]
+        
+        if not q_df.empty:
+            k1, k2 = st.columns(2)
+            k1.metric("Total QC Tests", len(q_df))
+            k2.metric("Unique Controls", q_df['Sample_ID'].nunique())
+            
+            st.write("#### 📊 QC Result Distribution (Precision)")
+            # Box plot to show stability/outliers for each parameter
+            fig_qc = px.box(q_df, x='Parameter', y='Result_Numeric', color='Parameter',
+                            points="all", title="QC Values Spread per Parameter")
+            st.plotly_chart(fig_qc, use_container_width=True)
+            
+            st.write("#### 📅 QC Run Timeline")
+            # Timeline of QC runs to check for frequency
+            q_df['DateOnly'] = q_df['Arrived_Date_Time'].dt.date
+            qc_timeline = q_df.groupby(['DateOnly', 'Parameter']).size().reset_index(name='Runs')
+            fig_timeline = px.scatter(qc_timeline, x='DateOnly', y='Parameter', size='Runs', color='Parameter', title="QC Frequency Timeline")
+            st.plotly_chart(fig_timeline, use_container_width=True)
+        else:
+            st.warning("No QC data available. Ensure 'QC (Control)' is selected in the sidebar.")
+
 else:
-    # --- Landing Page (Prevents Blank Screen) ---
     st.title("Welcome to converterPRO")
-    st.info("System Ready. Please upload a file in the sidebar to begin analysis.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        ### 🚀 How to use:
-        1. **Upload:** Drag your cobas pro CSV into the sidebar.
-        2. **Filter:** Use the dynamic date pickers to narrow your range.
-        3. **Analyze:** Switch to the **Dashboard** tab for QC vs Patient metrics.
-        4. **Export:** Download the unpivoted data for external LIS reporting.
-        """)
-    with col2:
-        # Placeholder for visual guidance
-        st.image("https://images.unsplash.com/photo-1576086213369-97a306d36557?auto=format&fit=crop&q=80&w=500", caption="Validated for Clinical Laboratory Use")
+    st.info("Please upload a cobas pro CSV file in the sidebar to view Analytics and QC dashboards.")
