@@ -3,6 +3,7 @@ import pandas as pd
 import csv
 import io
 import plotly.express as px
+import plotly.graph_objects as go
 import numpy as np
 
 # --- Page Configuration ---
@@ -24,6 +25,7 @@ def process_data(file_bytes):
         
         block_template = header_row[start_col : start_col + block_size]
         module_sub_idx = next((i for i, h in enumerate(block_template) if h in ["Module", "AU", "Unit_ID"]), -1)
+        alarm_sub_idx = next((i for i, h in enumerate(block_template) if h in ["Data_Alarm", "Alarm"]), -1)
 
         fixed_before = header_row[:draw_idx + 1]
         comment_cols = header_row[draw_idx + 1 : cup_idx]
@@ -31,6 +33,7 @@ def process_data(file_bytes):
         
         standard_block_headers = list(block_template)
         if module_sub_idx != -1: standard_block_headers[module_sub_idx] = "Module"
+        if alarm_sub_idx != -1: standard_block_headers[alarm_sub_idx] = "Data_Alarm"
         
         final_headers = fixed_before + comment_cols + fixed_after + ["ACN code", "Parameter"] + standard_block_headers
         
@@ -66,57 +69,59 @@ with st.sidebar:
             min_date, max_date = raw_df['Arrived_Date_Time'].min().date(), raw_df['Arrived_Date_Time'].max().date()
             sel_range = st.date_input("Date Range", [min_date, max_date])
             sel_cats = st.multiselect("Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
+
     st.sidebar.markdown("---")
-    st.sidebar.markdown("© 2026 **LabMesh.com** | v3.6")
+    st.sidebar.caption("⚙️ **Engine Details**")
+    st.sidebar.markdown("- **Adaptive Engine:** v3.8\n- **Compatibility:** cobas pro\n- **Copyright:** LabMesh.com")
 
 # --- Main App ---
 if uploaded_file and raw_df is not None:
     mask = (raw_df['Arrived_Date_Time'].dt.date >= sel_range[0]) & (raw_df['Arrived_Date_Time'].dt.date <= sel_range[1]) & (raw_df['Discrimination'].isin(sel_cats))
     df = raw_df.loc[mask]
 
-    tab_data, tab_analytics, tab_qc = st.tabs(["📄 Raw Data", "📊 Test Analytics", "🧪 Quality Control"])
+    t1, t2, t3, t4 = st.tabs(["📄 Raw Data", "📊 Test Analytics", "🧪 Quality Control", "⚠️ Error Detection"])
     
-    with tab_data:
+    with t1:
         st.subheader("Raw Data Table")
-        st.dataframe(df, use_container_width=True) # RESTORED TABLE
-        st.download_button("📥 Download Full CSV", df.to_csv(index=False), "raw_export.csv")
+        st.dataframe(df, use_container_width=True)
+        st.download_button("📥 Download CSV", df.to_csv(index=False), "export.csv")
 
-    with tab_analytics:
-        st.subheader("Module Peak Utilization")
+    with t2:
+        st.subheader("Module Peak Throughput & Utilization")
         if 'Module' in df.columns:
-            # Capacity Mapping (Max, Practical)
             caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
-            
-            # 1. Normalize Module Names (Group e801-1, e801-2 into e 801)
             util_df = df.copy()
-            util_df['Normalized_Module'] = util_df['Module'].apply(lambda x: next((k for k in caps if k in str(x)), "Other"))
+            util_df['Norm_Mod'] = util_df['Module'].apply(lambda x: next((k for k in caps if k in str(x)), "Other"))
             util_df['Hour'] = util_df['Arrived_Date_Time'].dt.hour
             util_df['Date'] = util_df['Arrived_Date_Time'].dt.date
-
-            # 2. Calculate tests per hour per module
-            hourly_util = util_df.groupby(['Date', 'Hour', 'Normalized_Module']).size().reset_index(name='Tests')
+            
+            hourly_util = util_df.groupby(['Date', 'Hour', 'Norm_Mod']).size().reset_index(name='Tests')
             
             cols = st.columns(len(caps))
+            peak_stats = []
             for idx, (m_type, values) in enumerate(caps.items()):
                 m_max, m_prac = values
-                # Get the peak hour across all days
-                m_data = hourly_util[hourly_util['Normalized_Module'] == m_type]
-                if not m_data.empty:
-                    peak_val = m_data['Tests'].max()
-                    util_pct = (peak_val / m_prac) * 100
-                    cols[idx].metric(f"{m_type} Peak", f"{peak_val} T/Hr", f"{util_pct:.1f}% of Practical")
-                    cols[idx].caption(f"Max: {m_max} | Practical: {m_prac}")
-                else:
-                    cols[idx].metric(f"{m_type} Peak", "0 T/Hr", "No Data")
+                peak_val = hourly_util[hourly_util['Norm_Mod'] == m_type]['Tests'].max() if m_type in hourly_util['Norm_Mod'].values else 0
+                util_pct = (peak_val / m_prac) * 100 if m_prac > 0 else 0
+                cols[idx].metric(f"{m_type} Peak", f"{peak_val} T/Hr", f"{util_pct:.1f}% Capacity")
+                peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Practical': m_prac, 'Theoretical': m_max})
+
+            st.write("#### 🚀 Peak Performance vs. Limits")
+            fig_peak = go.Figure()
+            fig_peak.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], name='Actual Peak', marker_color='#0b41cd', text=[d['Peak'] for d in peak_stats], textposition='auto'))
+            for i, d in enumerate(peak_stats):
+                fig_peak.add_shape(type="line", x0=i-0.4, y0=d['Practical'], x1=i+0.4, y1=d['Practical'], line=dict(color="orange", width=3, dash="dash"))
+                fig_peak.add_shape(type="line", x0=i-0.4, y0=d['Theoretical'], x1=i+0.4, y1=d['Theoretical'], line=dict(color="red", width=3))
+            st.plotly_chart(fig_peak, use_container_width=True)
 
         st.markdown("---")
-        st.write("#### 🕒 24-Hour Arrival Pattern (Patient Samples)")
+        st.write("#### 🕒 24-Hour Sample Arrival Pattern")
         p_df = df[df['Discrimination'].str.contains("Patient", na=False)].copy()
         if not p_df.empty:
             p_df['Hour'] = p_df['Arrived_Date_Time'].dt.hour
             p_df['Date'] = p_df['Arrived_Date_Time'].dt.strftime('%Y-%m-%d')
-            h_counts = p_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Samples')
-            fig = px.line(h_counts, x='Hour', y='Samples', color='Date', markers=True, text='Samples')
+            h_counts = p_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Count')
+            fig = px.line(h_counts, x='Hour', y='Count', color='Date', markers=True, text='Count')
             fig.update_layout(xaxis=dict(tickmode='linear', range=[0, 23]))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -126,20 +131,29 @@ if uploaded_file and raw_df is not None:
         with c2:
             st.plotly_chart(px.pie(df, names='Gender', hole=0.4, title="Demographics"), use_container_width=True)
 
-    with tab_qc:
+    with t3:
+        st.subheader("Quality Control Precision & Timing")
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
-            st.write("#### 🕒 QC Execution Timeline")
             q_df['HourFloat'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            fig_qc = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter')
+            fig_qc = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter', title="Daily QC Execution Schedule")
             fig_qc.update_layout(xaxis=dict(tickmode='linear', range=[0, 24]))
             st.plotly_chart(fig_qc, use_container_width=True)
             
-            st.write("#### 📋 Precision Table")
             q_df['Date'] = q_df['Arrived_Date_Time'].dt.date
             qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(Runs='count', Mean='mean', SD='std').reset_index()
             qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2).map("{:.2f}%".format)
             st.dataframe(qc_stats, use_container_width=True)
+            st.plotly_chart(px.box(q_df, x='Parameter', y='Result_Numeric', color='Parameter', title="QC Result Spread"), use_container_width=True)
+
+    with t4:
+        st.subheader("Error & Alarm Analytics")
+        if 'Data_Alarm' in df.columns:
+            error_df = df[df['Data_Alarm'].str.strip() != ""].copy()
+            if not error_df.empty:
+                top_alarms = error_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='Count').sort_values('Count', ascending=False).head(20)
+                st.plotly_chart(px.bar(top_alarms, x='Data_Alarm', y='Count', color='Module', text='Count', title="Top 20 Alarms"), use_container_width=True)
+                st.dataframe(error_df[['Arrived_Date_Time', 'Sample_ID', 'Parameter', 'Module', 'Data_Alarm']], use_container_width=True)
 else:
     st.title("Welcome to converterPRO")
-    st.info("System Ready. Please upload a file in the sidebar.")
+    st.info("Ready. Please upload a CSV file in the sidebar.")
