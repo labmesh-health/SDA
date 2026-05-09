@@ -4,7 +4,6 @@ import csv
 import io
 import plotly.express as px
 import numpy as np
-from datetime import datetime
 
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
@@ -73,14 +72,10 @@ with st.sidebar:
             categories = raw_df['Discrimination'].unique().tolist()
             sel_cats = st.multiselect("Data Categories", categories, default=categories)
 
-    # --- Sidebar Footer (Requested Version & Copyright) ---
+    # Sidebar Footer
     st.sidebar.markdown("---")
     st.sidebar.caption("⚙️ **Engine Details**")
-    st.sidebar.markdown("""
-    - **Adaptive Engine:** v3.2
-    - **Compatibility:** cobas pro (All SW Versions)
-    - **Status:** Validated
-    """)
+    st.sidebar.markdown("- **Adaptive Engine:** v3.3\n- **Compatibility:** cobas pro (All SW Versions)\n- **Status:** Validated")
     st.sidebar.markdown("---")
     st.sidebar.markdown("© 2026 **LabMesh.com**")
 
@@ -103,19 +98,31 @@ if uploaded_file and raw_df is not None:
         p_df = df[df['Discrimination'].str.contains("Patient", na=False)]
         
         if not p_df.empty:
+            # KPI Row
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Total Patient Tests", len(p_df))
+            k2.metric("Unique Patient Samples", p_df['Sample_ID'].nunique())
+            k3.metric("Parameters Tested", p_df['Parameter'].nunique())
+
             st.write("#### 🕒 24-Hour Sample Arrival Pattern")
             pattern_df = p_df.copy()
             pattern_df['Hour'] = pattern_df['Arrived_Date_Time'].dt.hour
             pattern_df['Date'] = pattern_df['Arrived_Date_Time'].dt.strftime('%Y-%m-%d')
-            
             hourly_counts = pattern_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Sample Count')
             
-            fig_trend = px.line(hourly_counts, x='Hour', y='Sample Count', color='Date',
-                                markers=True, text='Sample Count', 
-                                title="Daily Arrival Volume by Hour")
+            fig_trend = px.line(hourly_counts, x='Hour', y='Sample Count', color='Date', markers=True, text='Sample Count')
             fig_trend.update_traces(textposition="top center")
             fig_trend.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_trend, use_container_width=True)
+            
+            st.markdown("---")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("#### 🧪 Test Volume by Parameter")
+                st.plotly_chart(px.bar(p_df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', color='Parameter'), use_container_width=True)
+            with c2:
+                st.write("#### 🚻 Gender Distribution")
+                st.plotly_chart(px.pie(p_df, names='Gender', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
         else:
             st.warning("No Patient data selected.")
 
@@ -125,27 +132,23 @@ if uploaded_file and raw_df is not None:
         
         if not q_df.empty:
             st.write("#### 🕒 QC Run Matrix (24-Hour Scale)")
-            q_df['Time'] = q_df['Arrived_Date_Time'].dt.strftime('%H:%M')
             q_df['HourFloat'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            
-            fig_qc_time = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter',
-                                     hover_data={'Time': True},
-                                     title="Daily QC Execution Schedule",
-                                     labels={'HourFloat': 'Time (24h)'})
+            fig_qc_time = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter', title="Daily QC Execution Schedule")
             fig_qc_time.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 24]))
             st.plotly_chart(fig_qc_time, use_container_width=True)
 
             st.markdown("---")
-            st.write("#### 📋 QC Precision Spread (Control-Wise Daily Summary)")
+            st.write("#### 📋 QC Precision Statistics (Control-Wise Daily Summary)")
             q_df['Date'] = q_df['Arrived_Date_Time'].dt.date
-            
             qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(
                 Runs='count', Mean='mean', SD='std'
             ).reset_index()
-            qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2)
+            qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2).map("{:.2f}%".format)
             qc_stats[['Mean', 'SD']] = qc_stats[['Mean', 'SD']].round(3)
-            
-            st.dataframe(qc_stats.sort_values(by=['Date', 'Parameter']), use_container_width=True)
+            st.dataframe(qc_stats, use_container_width=True)
+
+            st.write("#### 📊 Result Distribution (Box Plot)")
+            st.plotly_chart(px.box(q_df, x='Parameter', y='Result_Numeric', color='Parameter', points="all"), use_container_width=True)
         else:
             st.warning("No QC data found.")
 
