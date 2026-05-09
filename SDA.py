@@ -4,6 +4,7 @@ import csv
 import io
 import plotly.express as px
 import numpy as np
+from datetime import datetime
 
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
@@ -70,11 +71,21 @@ with st.sidebar:
             sel_range = st.date_input("Date Range", [min_date, max_date])
             
             categories = raw_df['Discrimination'].unique().tolist()
-            sel_cats = st.multiselect("Visible Categories", categories, default=categories)
+            sel_cats = st.multiselect("Data Categories", categories, default=categories)
+
+    # --- Sidebar Footer (Requested Version & Copyright) ---
+    st.sidebar.markdown("---")
+    st.sidebar.caption("⚙️ **Engine Details**")
+    st.sidebar.markdown("""
+    - **Adaptive Engine:** v3.2
+    - **Compatibility:** cobas pro (All SW Versions)
+    - **Status:** Validated
+    """)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("© 2026 **LabMesh.com**")
 
 # --- Main App Area ---
 if uploaded_file and raw_df is not None:
-    # Applying Global Filters
     mask = (raw_df['Arrived_Date_Time'].dt.date >= sel_range[0]) & \
            (raw_df['Arrived_Date_Time'].dt.date <= sel_range[1]) & \
            (raw_df['Discrimination'].isin(sel_cats))
@@ -105,15 +116,6 @@ if uploaded_file and raw_df is not None:
             fig_trend.update_traces(textposition="top center")
             fig_trend.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_trend, use_container_width=True)
-            
-            st.markdown("---")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("#### 🧪 Total Test Volume")
-                st.plotly_chart(px.bar(p_df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', color='Parameter'), use_container_width=True)
-            with c2:
-                st.write("#### 🚻 Gender Demographics")
-                st.plotly_chart(px.pie(p_df, names='Gender', hole=0.4), use_container_width=True)
         else:
             st.warning("No Patient data selected.")
 
@@ -122,46 +124,28 @@ if uploaded_file and raw_df is not None:
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         
         if not q_df.empty:
-            # 1. QC Run Matrix (Timeline)
             st.write("#### 🕒 QC Run Matrix (24-Hour Scale)")
             q_df['Time'] = q_df['Arrived_Date_Time'].dt.strftime('%H:%M')
             q_df['HourFloat'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
             
             fig_qc_time = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter',
-                                     hover_data={'Time': True, 'HourFloat': False},
+                                     hover_data={'Time': True},
                                      title="Daily QC Execution Schedule",
-                                     labels={'HourFloat': 'Time of Day (Hour)'})
+                                     labels={'HourFloat': 'Time (24h)'})
             fig_qc_time.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 24]))
             st.plotly_chart(fig_qc_time, use_container_width=True)
 
             st.markdown("---")
-            
-            # 2. QC Precision Statistics Table
-            st.write("#### 📋 QC Precision Spread (Daily Summary)")
+            st.write("#### 📋 QC Precision Spread (Control-Wise Daily Summary)")
             q_df['Date'] = q_df['Arrived_Date_Time'].dt.date
             
-            # Grouping and Aggregation
             qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(
-                Count='count',
-                Mean='mean',
-                SD='std'
+                Runs='count', Mean='mean', SD='std'
             ).reset_index()
-            
-            # Calculate CV% (Coefficient of Variation)
-            qc_stats['CV%'] = (qc_stats['SD'] / qc_stats['Mean']) * 100
-            
-            # Formatting for display
-            qc_stats['Mean'] = qc_stats['Mean'].round(3)
-            qc_stats['SD'] = qc_stats['SD'].round(3)
-            qc_stats['CV%'] = qc_stats['CV%'].round(2).map("{:.2f}%".format)
+            qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2)
+            qc_stats[['Mean', 'SD']] = qc_stats[['Mean', 'SD']].round(3)
             
             st.dataframe(qc_stats.sort_values(by=['Date', 'Parameter']), use_container_width=True)
-            
-            st.markdown("---")
-            
-            # 3. Precision Box Plot
-            st.write("#### 📊 QC Result Distribution")
-            st.plotly_chart(px.box(q_df, x='Parameter', y='Result_Numeric', color='Parameter', points="all"), use_container_width=True)
         else:
             st.warning("No QC data found.")
 
