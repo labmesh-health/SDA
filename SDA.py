@@ -2,116 +2,94 @@ import streamlit as st
 import pandas as pd
 import csv
 import io
-from datetime import datetime
+import plotly.express as px
 
-# --- Page Configuration ---
-st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
-
-# --- Core Processing Function ---
+# --- Adaptive Core Processing Function ---
 @st.cache_data
-def process_roche_csv(file_bytes):
-    # Decode and read CSV
+def process_roche_csv_adaptive(file_bytes):
     content = file_bytes.decode("utf-8", errors="replace")
     reader = csv.reader(io.StringIO(content))
     raw_data = list(reader)
 
     if len(raw_data) < 2:
-        raise ValueError("CSV must have at least two rows.")
+        raise ValueError("CSV format invalid: Missing headers.")
 
     row0 = raw_data[0]
     header_row = raw_data[1]
 
-    # Column Indexing
+    # --- DYNAMIC ANCHOR DETECTION ---
     try:
+        # Find critical markers
         draw_idx = header_row.index("Drawing_Date_Time")
         cup_idx = header_row.index("Sample_Cup")
-        # Find Arrived_Date_Time for the date picker range
-        arrival_idx = header_row.index("Arrived_Date_Time") 
-    except ValueError:
-        raise ValueError("Missing required columns. Please check CSV format.")
+        start_col = header_row.index("Result") # First result block starts here
+        
+        # Determine block size (8 vs 11)
+        is_11_col = "EMF1" in header_row
+        block_size = 11 if is_11_col else 8
+        
+        # Determine columns names for the block
+        # We take the column names from the first block to be safe
+        block_columns = header_row[start_col : start_col + block_size]
+    except ValueError as e:
+        raise ValueError(f"Missing required column in CSV: {e}")
 
-    # ... [Logic remains same as your provided code for block processing] ...
-    # (Assuming the unpivoting logic from your snippet is here)
+    # --- COMPOSE HEADERS ---
+    # Everything before comments
+    fixed_before = header_row[:draw_idx + 1]
+    # Comments (everything between date and cup)
+    comment_cols = header_row[draw_idx + 1 : cup_idx]
+    # Metadata between cup and results (Operator, Pre-dilution, etc.)
+    fixed_after = header_row[cup_idx : start_col]
     
-    # [Simplified placeholder for transformation logic to ensure code runs]
-    is_11_col = "EMF1" in header_row
-    block_size = 11 if is_11_col else 8
-    final_headers = header_row[:draw_idx + 1] + header_row[draw_idx + 1 : cup_idx] + header_row[cup_idx : cup_idx + 3] + ["ACN code", "Parameter"] + header_row[-block_size:]
-    
+    final_headers = fixed_before + comment_cols + fixed_after + ["ACN code", "Parameter"] + block_columns
+
+    # --- TRANSFORMATION LOGIC ---
     blocks = []
-    # Data Transformation Loop
-    start_col = cup_idx + 3
+    # Loop through columns in increments of block_size
     for col in range(start_col, len(header_row), block_size):
-        if col + block_size - 1 < len(header_row):
-            p1, p2 = row0[col], row0[col+1]
+        if col + block_size <= len(header_row):
+            # Extract ACN and Parameter from Row 0
+            # Usually row0[col] is ACN, row0[col+1] is Name
+            acn = row0[col] if col < len(row0) else ""
+            param = row0[col+1] if col+1 < len(row0) else ""
+            
             for row_idx in range(2, len(raw_data)):
-                row_data = raw_data[row_idx]
-                if any(val.strip() for val in row_data[col:col+block_size]):
-                    new_row = row_data[:draw_idx+1] + row_data[draw_idx+1:cup_idx] + row_data[cup_idx:cup_idx+3] + [p1, p2] + row_data[col:col+block_size]
+                row_vals = raw_data[row_idx]
+                if len(row_vals) <= col: continue
+                
+                assay_slice = row_vals[col : col + block_size]
+                
+                # Only keep rows where a result actually exists in this block
+                if any(val.strip() for val in assay_slice):
+                    # Combine static metadata + assay specific data
+                    meta_before = row_vals[:draw_idx + 1]
+                    meta_cmts = row_vals[draw_idx + 1 : cup_idx]
+                    meta_after = row_vals[cup_idx : start_col]
+                    
+                    # Pad slices if row is short
+                    meta_cmts += [""] * (len(comment_cols) - len(meta_cmts))
+                    meta_after += [""] * (len(fixed_after) - len(meta_after))
+                    assay_slice += [""] * (block_size - len(assay_slice))
+                    
+                    new_row = meta_before + meta_cmts + meta_after + [acn, param] + assay_slice
                     blocks.append(new_row)
     
     df = pd.DataFrame(blocks, columns=final_headers)
-
-    # Convert Arrived_Date_Time to datetime objects for filtering
-    df['Arrived_Date_Time'] = pd.to_datetime(df['Arrived_Date_Time'], errors='coerce')
     
+    # Cleaning and Mapping (Adaptive to presence of columns)
+    if 'Arrived_Date_Time' in df.columns:
+        df['Arrived_Date_Time'] = pd.to_datetime(df['Arrived_Date_Time'], errors='coerce')
+    
+    df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce') if 'Result' in df.columns else None
+
+    # Mappings
+    map_dict = {
+        "Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
+        "Discrimination": {"1": "Patient (Routine)", "2": "Patient (STAT)", "3": "QC (Control)"}
+    }
+    for col, mapping in map_dict.items():
+        if col in df.columns:
+            df[col] = df[col].astype(str).map(mapping).fillna(df[col])
+            
     return df
-
-# --- Sidebar UI ---
-with st.sidebar:
-    st.title("💡 converterPRO")
-    st.markdown("---")
-    
-    st.subheader("📁 Upload Data")
-    uploaded_file = st.file_uploader("Choose Instrument CSV", type=["csv"])
-    
-    st.markdown("---")
-    st.subheader("⚙️ Session Details")
-    st.info("Version: 2.1.0\n\nStatus: Ready")
-    
-    if st.button("Reset Session"):
-        st.cache_data.clear()
-        st.rerun()
-
-# --- Main App Logic ---
-tab1, tab2 = st.tabs(["📄 Raw Data", "📊 Dashboard"])
-
-with tab1:
-    if uploaded_file is not None:
-        try:
-            with st.spinner("Processing..."):
-                file_bytes = uploaded_file.getvalue()
-                df = process_roche_csv(file_bytes)
-            
-            # --- Sidebar Date Pickers (Dynamic) ---
-            with st.sidebar:
-                st.markdown("---")
-                st.subheader("📅 Date Range Filter")
-                
-                # Get min and max dates from data
-                min_date = df['Arrived_Date_Time'].min().date()
-                max_date = df['Arrived_Date_Time'].max().date()
-                
-                from_date = st.date_input("From Date", min_date, min_value=min_date, max_value=max_date)
-                to_date = st.date_input("To Date", max_date, min_value=min_date, max_value=max_date)
-            
-            # --- Apply Date Filter ---
-            mask = (df['Arrived_Date_Time'].dt.date >= from_date) & (df['Arrived_Date_Time'].dt.date <= to_date)
-            filtered_df = df.loc[mask]
-
-            st.success(f"✅ Showing {len(filtered_df)} records from {from_date} to {to_date}")
-            
-            # Display & Download
-            st.dataframe(filtered_df, use_container_width=True)
-            
-            csv_export = filtered_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Filtered CSV", csv_export, f"Filtered_{uploaded_file.name}", "text/csv")
-
-        except Exception as e:
-            st.error(f"Error: {e}")
-    else:
-        st.title("Welcome to converterPRO")
-        st.write("Please upload your instrument CSV file in the left sidebar to begin.")
-
-with tab2:
-    st.info("Dashboard module will display metrics for the selected date range.")
