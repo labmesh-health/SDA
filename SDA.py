@@ -75,7 +75,7 @@ with st.sidebar:
 
     st.sidebar.markdown("---")
     st.sidebar.caption("⚙️ **Engine Details**")
-    st.sidebar.markdown("- **Adaptive Engine:** v4.1\n- **Compatibility:** cobas pro\n- **Copyright:** LabMesh.com")
+    st.sidebar.markdown("- **Adaptive Engine:** v4.1\n- **Compatibility:** cobas pro (03.03 onwards)\n- **Copyright:** LabMesh.com")
 
 # --- Main App ---
 if uploaded_file and raw_df is not None:
