@@ -3,6 +3,7 @@ import pandas as pd
 import csv
 import io
 import plotly.express as px
+import numpy as np
 
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
@@ -79,7 +80,6 @@ if uploaded_file and raw_df is not None:
            (raw_df['Discrimination'].isin(sel_cats))
     df = raw_df.loc[mask]
 
-    # TAB STRUCTURE
     tab_data, tab_analytics, tab_qc = st.tabs(["📄 Data View", "📊 Test Analytics", "🧪 Quality Control"])
     
     with tab_data:
@@ -97,14 +97,13 @@ if uploaded_file and raw_df is not None:
             pattern_df['Hour'] = pattern_df['Arrived_Date_Time'].dt.hour
             pattern_df['Date'] = pattern_df['Arrived_Date_Time'].dt.strftime('%Y-%m-%d')
             
-            # Grouping for data labels
             hourly_counts = pattern_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Sample Count')
             
             fig_trend = px.line(hourly_counts, x='Hour', y='Sample Count', color='Date',
-                                markers=True, text='Sample Count', # Added data labels
+                                markers=True, text='Sample Count', 
                                 title="Daily Arrival Volume by Hour")
             fig_trend.update_traces(textposition="top center")
-            fig_trend.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1))
+            fig_trend.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_trend, use_container_width=True)
             
             st.markdown("---")
@@ -116,33 +115,56 @@ if uploaded_file and raw_df is not None:
                 st.write("#### 🚻 Gender Demographics")
                 st.plotly_chart(px.pie(p_df, names='Gender', hole=0.4), use_container_width=True)
         else:
-            st.warning("Please ensure Patient categories are selected to view analytics.")
+            st.warning("No Patient data selected.")
 
     with tab_qc:
         st.subheader("Quality Control Precision & Timing")
-        q_df = df[df['Discrimination'].str.contains("QC", na=False)]
+        q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         
         if not q_df.empty:
-            st.write("#### 🕒 QC Run Matrix (Timeline)")
-            # Representing what times in a day which QC is run
-            q_df_time = q_df.copy()
-            q_df_time['Time'] = q_df_time['Arrived_Date_Time'].dt.strftime('%H:%M')
-            q_df_time['HourFloat'] = q_df_time['Arrived_Date_Time'].dt.hour + q_df_time['Arrived_Date_Time'].dt.minute/60
+            # 1. QC Run Matrix (Timeline)
+            st.write("#### 🕒 QC Run Matrix (24-Hour Scale)")
+            q_df['Time'] = q_df['Arrived_Date_Time'].dt.strftime('%H:%M')
+            q_df['HourFloat'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
             
-            fig_qc_time = px.scatter(q_df_time, x='HourFloat', y='Parameter', color='Parameter',
+            fig_qc_time = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter',
                                      hover_data={'Time': True, 'HourFloat': False},
-                                     title="Daily QC Execution Times",
-                                     labels={'HourFloat': 'Time of Day (24h Scale)'})
-            fig_qc_time.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=2))
+                                     title="Daily QC Execution Schedule",
+                                     labels={'HourFloat': 'Time of Day (Hour)'})
+            fig_qc_time.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 24]))
             st.plotly_chart(fig_qc_time, use_container_width=True)
 
             st.markdown("---")
-            st.write("#### 📊 QC Precision Spread")
+            
+            # 2. QC Precision Statistics Table
+            st.write("#### 📋 QC Precision Spread (Daily Summary)")
+            q_df['Date'] = q_df['Arrived_Date_Time'].dt.date
+            
+            # Grouping and Aggregation
+            qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(
+                Count='count',
+                Mean='mean',
+                SD='std'
+            ).reset_index()
+            
+            # Calculate CV% (Coefficient of Variation)
+            qc_stats['CV%'] = (qc_stats['SD'] / qc_stats['Mean']) * 100
+            
+            # Formatting for display
+            qc_stats['Mean'] = qc_stats['Mean'].round(3)
+            qc_stats['SD'] = qc_stats['SD'].round(3)
+            qc_stats['CV%'] = qc_stats['CV%'].round(2).map("{:.2f}%".format)
+            
+            st.dataframe(qc_stats.sort_values(by=['Date', 'Parameter']), use_container_width=True)
+            
+            st.markdown("---")
+            
+            # 3. Precision Box Plot
+            st.write("#### 📊 QC Result Distribution")
             st.plotly_chart(px.box(q_df, x='Parameter', y='Result_Numeric', color='Parameter', points="all"), use_container_width=True)
         else:
-            st.warning("No QC data found. Select 'QC (Control)' in the sidebar filters.")
+            st.warning("No QC data found.")
 
 else:
-    # Landing Page
     st.title("Welcome to converterPRO")
-    st.info("System Ready. Please upload a cobas pro CSV file in the sidebar to generate Dashboards.")
+    st.info("System Ready. Please upload a cobas pro CSV file in the sidebar.")
