@@ -168,7 +168,7 @@ if uploaded_file and raw_df is not None:
             error_df = df[df['Data_Alarm'].str.strip() != ""].copy()
             if not error_df.empty:
                 top_alarms = error_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='Count').sort_values('Count', ascending=False).head(20)
-                st.plotly_chart(px.bar(top_alarms, x='Data_Alarm', y='Count', color='Module', text='Count', title="Top 20 Alarms"), use_container_width=True)
+                st.plotly_chart(px.bar(top_alarms, x='Data_Alarm', y='Count', color='Module', text='Count', title="Top 20 Data Alarms"), use_container_width=True)
                 st.dataframe(error_df[['Arrived_Date_Time', 'Sample_ID', 'Parameter', 'Module', 'Data_Alarm']], use_container_width=True)
 else:
     st.title("Welcome to converterPRO")
