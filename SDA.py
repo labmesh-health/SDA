@@ -75,9 +75,9 @@ with st.sidebar:
 
     st.sidebar.markdown("---")
     st.sidebar.caption("⚙️ **Engine Details**")
-    st.sidebar.markdown("- **Adaptive Engine:** v4.0\n- **Compatibility:** cobas pro\n- **Copyright:** LabMesh.com")
+    st.sidebar.markdown("- **Adaptive Engine:** v4.1\n- **Compatibility:** cobas pro\n- **Copyright:** LabMesh.com")
 
-# --- Main App Area ---
+# --- Main App ---
 if uploaded_file and raw_df is not None:
     mask = (raw_df['Arrived_Date_Time'].dt.date >= sel_range[0]) & (raw_df['Arrived_Date_Time'].dt.date <= sel_range[1]) & (raw_df['Discrimination'].isin(sel_cats))
     df = raw_df.loc[mask]
@@ -90,7 +90,7 @@ if uploaded_file and raw_df is not None:
         st.download_button("📥 Export CSV", df.to_csv(index=False), "export.csv")
 
     with t2:
-        st.subheader("Module Peak Throughput (Tests/Hr)")
+        st.subheader("Module Throughput & Capacity")
         if 'Module' in df.columns and 'Sampling_Date_Time' in df.columns:
             caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
             util_df = df.copy().dropna(subset=['Sampling_Date_Time'])
@@ -98,76 +98,78 @@ if uploaded_file and raw_df is not None:
             util_df['S_Hour'] = util_df['Sampling_Date_Time'].dt.hour
             util_df['S_Date'] = util_df['Sampling_Date_Time'].dt.strftime('%Y-%m-%d')
             
+            # --- 1. Peak KPI Metrics ---
             hourly_util = util_df.groupby(['S_Date', 'S_Hour', 'Norm_Mod']).size().reset_index(name='Tests')
-            
             cols = st.columns(len(caps))
             peak_stats = []
             for idx, (m_type, values) in enumerate(caps.items()):
                 m_max, m_prac = values
                 peak_val = hourly_util[hourly_util['Norm_Mod'] == m_type]['Tests'].max() if m_type in hourly_util['Norm_Mod'].values else 0
-                util_pct = (peak_val / m_prac) * 100 if m_prac > 0 else 0
-                cols[idx].metric(f"{m_type} Peak", f"{peak_val} T/Hr", f"{util_pct:.1f}% Capacity")
+                cols[idx].metric(f"{m_type} Peak", f"{peak_val} T/Hr", f"{((peak_val/m_prac)*100):.1f}% Capacity" if m_prac > 0 else "0%")
                 peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Practical': m_prac, 'Theoretical': m_max})
 
-            st.write("#### 🚀 Peak Performance vs. Instrument Capacity")
+            # --- 2. Interactive Throughput Line Graph ---
+            st.markdown("---")
+            st.write("#### 📈 Module Throughput Pattern (Line Graph)")
+            available_modules = hourly_util['Norm_Mod'].unique().tolist()
+            selected_mod_view = st.selectbox("Select Module to View Hourly Pattern", available_modules)
+            
+            filtered_trend = hourly_util[hourly_util['Norm_Mod'] == selected_mod_view]
+            fig_trend = px.line(filtered_trend, x='S_Hour', y='Tests', color='S_Date', 
+                                markers=True, text='Tests',
+                                labels={'S_Hour': 'Hour (24h)', 'Tests': 'Total Tests Processed'},
+                                title=f"Hourly Performance Trend: {selected_mod_view}")
+            fig_trend.update_traces(textposition="top center")
+            fig_trend.update_layout(xaxis=dict(tickmode='linear', range=[0, 23]))
+            st.plotly_chart(fig_trend, use_container_width=True)
+
+            # --- 3. Peak Bar Chart with Limit Lines ---
+            st.markdown("---")
+            st.write("#### 🚀 Peak Throughput vs. Instrument Limits")
             fig_peak = go.Figure()
             fig_peak.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], name='Actual Peak', marker_color='#0b41cd', text=[d['Peak'] for d in peak_stats], textposition='auto'))
             for i, d in enumerate(peak_stats):
                 fig_peak.add_shape(type="line", x0=i-0.4, y0=d['Practical'], x1=i+0.4, y1=d['Practical'], line=dict(color="orange", width=3, dash="dash"))
                 fig_peak.add_shape(type="line", x0=i-0.4, y0=d['Theoretical'], x1=i+0.4, y1=d['Theoretical'], line=dict(color="red", width=3))
             st.plotly_chart(fig_peak, use_container_width=True)
-
-            st.write("#### 📈 Hourly Module Throughput Trend (Sampling Time)")
-            # Multi-line chart showing tests/hr split by module and date
-            fig_mod_trend = px.line(hourly_util, x='S_Hour', y='Tests', color='S_Date', facet_row='Norm_Mod',
-                                     markers=True, labels={'S_Hour': 'Hour', 'Tests': 'Tests/Hr', 'Norm_Mod': 'Module'},
-                                     height=600, title="Throughput Pattern per Module")
-            fig_mod_trend.update_layout(xaxis=dict(tickmode='linear', range=[0, 23]))
-            st.plotly_chart(fig_mod_trend, use_container_width=True)
+            st.caption("🔴 Red = Theoretical Max | 🟠 Orange Dash = Practical Limit")
 
         st.markdown("---")
+        # Restored Arrival Pattern, Parameter Bar, and Gender Pie
         st.write("#### 🕒 24-Hour Sample Arrival Pattern (Entry into Lab)")
         p_df = df[df['Discrimination'].str.contains("Patient", na=False)].copy()
         if not p_df.empty:
             p_df['Hour'] = p_df['Arrived_Date_Time'].dt.hour
             p_df['Date'] = p_df['Arrived_Date_Time'].dt.strftime('%Y-%m-%d')
             h_counts = p_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Samples')
-            fig = px.line(h_counts, x='Hour', y='Samples', color='Date', markers=True, text='Samples')
-            fig.update_layout(xaxis=dict(tickmode='linear', range=[0, 23]))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(px.line(h_counts, x='Hour', y='Samples', color='Date', markers=True, text='Samples').update_layout(xaxis=dict(tickmode='linear', range=[0, 23])), use_container_width=True)
 
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(px.bar(df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', title="Test Volume by Parameter", color='Parameter'), use_container_width=True)
+            st.plotly_chart(px.bar(df['Parameter'].value_counts().reset_index(), x='Parameter', y='count', title="Test Volume", color='Parameter'), use_container_width=True)
         with c2:
-            st.plotly_chart(px.pie(df, names='Gender', hole=0.4, title="Gender Demographics"), use_container_width=True)
+            st.plotly_chart(px.pie(df, names='Gender', hole=0.4, title="Gender Distribution"), use_container_width=True)
 
     with t3:
-        st.subheader("Quality Control Precision & Timing")
+        st.subheader("Quality Control Precision")
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
-            st.write("#### 🕒 QC Run Matrix (24-Hour Timeline)")
             q_df['HourFloat'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            fig_qc = px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter', title="Execution Timing")
-            fig_qc.update_layout(xaxis=dict(tickmode='linear', range=[0, 24]))
-            st.plotly_chart(fig_qc, use_container_width=True)
-            
-            st.write("#### 📋 Precision Table (Daily Summary)")
+            st.plotly_chart(px.scatter(q_df, x='HourFloat', y='Parameter', color='Parameter', title="Execution Timing").update_layout(xaxis=dict(tickmode='linear', range=[0, 24])), use_container_width=True)
             q_df['Date'] = q_df['Arrived_Date_Time'].dt.date
             qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(Runs='count', Mean='mean', SD='std').reset_index()
             qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2).map("{:.2f}%".format)
-            qc_stats[['Mean', 'SD']] = qc_stats[['Mean', 'SD']].round(3)
             st.dataframe(qc_stats, use_container_width=True)
-            st.plotly_chart(px.box(q_df, x='Parameter', y='Result_Numeric', color='Parameter', title="QC Stability Box Plot"), use_container_width=True)
+            st.plotly_chart(px.box(q_df, x='Parameter', y='Result_Numeric', color='Parameter', title="QC Stability Plot"), use_container_width=True)
 
     with t4:
-        st.subheader("Error & Alarm Analytics")
+        st.subheader("Error Analytics")
         if 'Data_Alarm' in df.columns:
             error_df = df[df['Data_Alarm'].str.strip() != ""].copy()
             if not error_df.empty:
                 top_alarms = error_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='Count').sort_values('Count', ascending=False).head(20)
-                st.plotly_chart(px.bar(top_alarms, x='Data_Alarm', y='Count', color='Module', text='Count', title="Top 20 Alarms Module-wise"), use_container_width=True)
+                st.plotly_chart(px.bar(top_alarms, x='Data_Alarm', y='Count', color='Module', text='Count', title="Top 20 Alarms"), use_container_width=True)
                 st.dataframe(error_df[['Arrived_Date_Time', 'Sample_ID', 'Parameter', 'Module', 'Data_Alarm']], use_container_width=True)
 else:
     st.title("Welcome to converterPRO")
-    st.info("System Ready. Please upload a file in the sidebar.")
+    st.info("System Ready. Please upload a file to begin.")
