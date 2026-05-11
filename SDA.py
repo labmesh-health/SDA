@@ -65,6 +65,7 @@ def process_data(file_bytes):
 # --- Sidebar ---
 with st.sidebar:
     st.title("💡 converterPRO")
+    st.markdown("### 📁 Data Upload")
     uploaded_file = st.file_uploader("Upload Instrument CSV", type=["csv"])
     if uploaded_file:
         raw_df = process_data(uploaded_file.getvalue())
@@ -73,8 +74,13 @@ with st.sidebar:
             min_d, max_d = raw_df['Arrived_Date_Time'].min().date(), raw_df['Arrived_Date_Time'].max().date()
             sel_range = st.date_input("Date Range", [min_d, max_d])
             sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
+
+    # --- FOOTER (Engine Version & Copyright) ---
     st.sidebar.markdown("---")
-    st.sidebar.markdown("© 2026 **LabMesh.com** | v4.6")
+    st.sidebar.caption("⚙️ **Engine Details**")
+    st.sidebar.markdown("- **Adaptive Engine:** v4.6\n- **Compatibility:** cobas pro (All SW Versions)\n- **Status:** Validated")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("© 2026 **LabMesh.com**")
 
 # --- Main App ---
 if uploaded_file and raw_df is not None:
@@ -97,6 +103,12 @@ if uploaded_file and raw_df is not None:
             util_df['S_Date'] = util_df['Sampling_Date_Time'].dt.strftime('%Y-%m-%d')
             hourly_util = util_df.groupby(['S_Date', 'S_Hour', 'Norm_Mod']).size().reset_index(name='Tests')
             
+            # Module Trend Picker
+            available_mods = hourly_util['Norm_Mod'].unique().tolist()
+            sel_mod_view = st.selectbox("Select Module to View Hourly Pattern", available_mods)
+            st.plotly_chart(px.line(hourly_util[hourly_util['Norm_Mod'] == sel_mod_view], x='S_Hour', y='Tests', color='S_Date', markers=True, text='Tests').update_layout(xaxis=dict(tickmode='linear', range=[0, 23])), use_container_width=True)
+
+            # Peak Metrics
             cols = st.columns(len(caps))
             peak_stats = []
             for idx, (m_type, values) in enumerate(caps.items()):
@@ -105,10 +117,7 @@ if uploaded_file and raw_df is not None:
                 cols[idx].metric(f"{m_type} Peak", f"{peak_val} T/Hr", f"{((peak_val/m_prac)*100):.1f}% Capacity" if m_prac > 0 else "0%")
                 peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Practical': m_prac, 'Theoretical': m_max})
 
-            st.write("#### 📈 Module Throughput Trends (Line Graph)")
-            sel_mod_view = st.selectbox("Select Module to View Hourly Performance", hourly_util['Norm_Mod'].unique().tolist())
-            st.plotly_chart(px.line(hourly_util[hourly_util['Norm_Mod'] == sel_mod_view], x='S_Hour', y='Tests', color='S_Date', markers=True, text='Tests').update_layout(xaxis=dict(tickmode='linear', range=[0, 23])), use_container_width=True)
-
+            # Capacity Limits Chart
             fig_peak = go.Figure()
             fig_peak.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], marker_color='#0b41cd', text=[d['Peak'] for d in peak_stats], textposition='auto'))
             for i, d in enumerate(peak_stats):
@@ -117,6 +126,7 @@ if uploaded_file and raw_df is not None:
             st.plotly_chart(fig_peak, use_container_width=True)
 
         st.markdown("---")
+        # Arrival pattern and volume restored
         p_df = df[df['Discrimination'].str.contains("Patient", na=False)].copy()
         if not p_df.empty:
             st.write("#### 🕒 24-Hour Sample Arrival Pattern")
@@ -130,38 +140,40 @@ if uploaded_file and raw_df is not None:
         with c2: st.plotly_chart(px.pie(df, names='Gender', hole=0.4, title="Demographics"), use_container_width=True)
 
     with tabs[4]:
-        st.subheader("🧠 Prescriptive Performance Insights")
-        i_col1, i_col2 = st.columns(2)
-        with i_col1:
+        st.subheader("🧠 Operational & Mechanical Insights")
+        ins_col1, ins_col2 = st.columns(2)
+        with ins_col1:
             st.info("📊 **Throughput Strategy**")
             for d in peak_stats:
                 peak, prac, m_name = d['Peak'], d['Practical'], d['Module']
                 if peak > d['Theoretical']:
-                    st.error(f"⚠️ **Critical Overload ({m_name}):** Peak exceeded hardware max. Immediate review required.")
+                    st.error(f"⚠️ **Critical Overload ({m_name}):** Peak exceeded hardware max. Upgrade required.")
                 elif peak > prac:
-                    st.warning(f"🟠 **Peak Stress ({m_name}):** Exceeded practical limit. **Suggestion:** Optimize sample distribution by loading smaller, consistent batches.")
+                    st.warning(f"🟠 **Peak Stress ({m_name}):** Exceeded practical limit. **Recommendation:** Distribute workload into smaller, consistent batches.")
                 elif peak > (prac * 0.85):
-                    st.write(f"✅ **{m_name} Efficient Usage:** High utilization detected.")
+                    st.write(f"✅ **{m_name} High Utilization:** Efficiently loaded.")
 
-        with i_col2:
-            st.info("⚖️ **Assay Mapping & Load Balancing**")
+        with ins_col2:
+            st.info("⚖️ **Internal Sub-Module Balancing**")
             if 'Module' in df.columns:
                 mod_counts = df['Module'].value_counts()
-                # Search for twin sub-modules (e.g., e 801-1 and e 801-2)
                 for base in ["e 801", "c 503"]:
                     twins = [m for m in mod_counts.index if base in str(m)]
                     if len(twins) > 1:
                         v1, v2 = mod_counts[twins[0]], mod_counts[twins[1]]
                         if (max(v1,v2) / min(v1,v2)) > 1.25:
-                            st.warning(f"⚖️ **Internal Skew ({base}):** Uneven workload between sub-modules. **Suggestion:** Review **Assay Mapping** in instrument settings. Ensure high-volume assays are assigned to both modules for automatic distribution.")
+                            st.warning(f"⚖️ **Internal Skew ({base}):** Uneven workload between sub-modules. **Action:** Review internal **Assay Mapping** and **Test Assignment** settings.")
                         else:
-                            st.write(f"✅ **{base} Balancing:** Internal assay distribution is well-optimized.")
+                            st.write(f"✅ **{base} Balancing:** Well-distributed.")
 
         st.markdown("---")
         st.write("#### 🔄 Quality & Rerun Analysis")
-        r_rate = (len(df[df['Run'] == 'Rerun']) / len(df) * 100) if len(df) > 0 else 0
-        if r_rate > 5: st.error(f"🔄 **High Rerun Rate ({r_rate:.1f}%):** Suggests reagent or calibration drift.")
+        reruns = df[df['Run'] == 'Rerun']
+        r_rate = (len(reruns) / len(df) * 100) if len(df) > 0 else 0
+        if r_rate > 5: st.error(f"🔄 **High Rerun Rate ({r_rate:.1f}%):** Review calibration and reagent lots.")
         else: st.write(f"✅ **Rerun Rate:** Healthy at {r_rate:.1f}%.")
+        if not reruns.empty:
+            st.plotly_chart(px.bar(reruns['Parameter'].value_counts().reset_index(), x='Parameter', y='count', title="Top Parameters Requiring Reruns", color_discrete_sequence=['#ff4b4b']), use_container_width=True)
 
     with tabs[2]:
         st.subheader("QC Timing & Precision")
@@ -173,7 +185,7 @@ if uploaded_file and raw_df is not None:
             qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(Runs='count', Mean='mean', SD='std').reset_index()
             qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2).map("{:.2f}%".format)
             st.dataframe(qc_stats, use_container_width=True)
-            sel_qc_mod = st.multiselect("Filter Stability Plot by Module", q_df['Module'].unique().tolist(), default=q_df['Module'].unique().tolist())
+            sel_qc_mod = st.multiselect("Filter Box Plot by Module", q_df['Module'].unique().tolist(), default=q_df['Module'].unique().tolist())
             st.plotly_chart(px.box(q_df[q_df['Module'].isin(sel_qc_mod)], x='Parameter', y='Result_Numeric', color='Parameter', title="Filtered Stability Plot"), use_container_width=True)
 
     with tabs[3]:
@@ -181,9 +193,9 @@ if uploaded_file and raw_df is not None:
         if 'Data_Alarm' in df.columns:
             error_df = df[df['Data_Alarm'].str.strip() != ""].copy()
             if not error_df.empty:
-                top_alarms = error_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='Count').sort_values('Count', ascending=False).head(20)
-                st.plotly_chart(px.bar(top_alarms, x='Data_Alarm', y='Count', color='Module', text='Count'), use_container_width=True)
-
+                top_20 = error_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='Count').sort_values('Count', ascending=False).head(20)
+                st.plotly_chart(px.bar(top_20, x='Data_Alarm', y='Count', color='Module', text='Count'), use_container_width=True)
+                st.dataframe(error_df[['Arrived_Date_Time', 'Sample_ID', 'Parameter', 'Module', 'Data_Alarm']], use_container_width=True)
 else:
     st.title("Welcome to converterPRO")
     st.info("System Ready. Please upload a file in the sidebar.")
