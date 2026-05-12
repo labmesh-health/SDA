@@ -177,10 +177,8 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         if not q_df.empty:
             q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
             
-            # QC Scatter with labels
-            fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', text='Result_Numeric', title="QC Timing Matrix (24h)")
-            fig_qc.update_traces(textposition="top center")
-            st.plotly_chart(fig_qc, use_container_width=True)
+            # QC Scatter without text labels to prevent overlapping
+            st.plotly_chart(px.scatter(q_df, x='HF', y='Parameter', color='Parameter', title="QC Timing Matrix (24h)"), use_container_width=True)
             
             qc_stats = q_df.groupby(['Parameter', 'Sample_ID'])['Result_Numeric'].agg(Mean='mean', SD='std').reset_index()
             qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2)
