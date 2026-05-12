@@ -5,9 +5,21 @@ import io
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+from datetime import datetime
 
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
+
+# --- Clinical Knowledge Base (from Documentation) ---
+ALARM_MAP = {
+    ">v": {"name": "Above Technical Limit", "sev": "High", "msg": "Exceeds measurable range. Dilution required."},
+    "<v": {"name": "Below Technical Limit", "sev": "High", "msg": "Result below measurable range."},
+    "Short": {"name": "Short Sample", "sev": "Critical", "msg": "Insufficient volume. Check for micro-cups or air bubbles."},
+    "Clot": {"name": "Clot Detected", "sev": "Critical", "msg": "Fibrin/clot detected during aspiration. Re-spin sample."},
+    "Lin": {"name": "Linearity Error", "sev": "Medium", "msg": "Reaction curve non-linear. Review calibration."},
+    "Reag": {"name": "Reagent Issue", "sev": "Medium", "msg": "Check reagent pack integrity or volume."},
+    "S.Idx": {"name": "Serum Index Warning", "sev": "Low", "msg": "HIL interference (Hemolysis/Icterus/Lipemia)."},
+}
 
 @st.cache_data
 def process_data(file_bytes):
@@ -18,11 +30,14 @@ def process_data(file_bytes):
     row0, header_row = raw_data[0], raw_data[1]
 
     try:
+        # 1. Structural Identification
         draw_idx = header_row.index("Drawing_Date_Time")
+        arr_idx = header_row.index("Arrived_Date_Time")
         cup_idx = header_row.index("Sample_Cup")
         start_col = header_row.index("Result") 
         block_size = 11 if "EMF1" in header_row else 8
         
+        # 2. Column Normalization
         block_template = header_row[start_col : start_col + block_size]
         module_sub_idx = next((i for i, h in enumerate(block_template) if h in ["Module", "AU", "Unit_ID"]), -1)
         alarm_sub_idx = next((i for i, h in enumerate(block_template) if h in ["Data_Alarm", "Alarm"]), -1)
@@ -39,6 +54,7 @@ def process_data(file_bytes):
         
         final_headers = fixed_before + comment_cols + fixed_after + ["ACN code", "Parameter"] + standard_block_headers
         
+        # 3. Unpivoting Engine
         blocks = []
         for col in range(start_col, len(header_row), block_size):
             if col + block_size <= len(header_row):
@@ -49,18 +65,56 @@ def process_data(file_bytes):
                         if len(payload) == len(final_headers): blocks.append(payload)
         
         df = pd.DataFrame(blocks, columns=final_headers)
+        
+        # 4. New Additions: Datetime & Durations
+        df['Drawing_Date_Time'] = pd.to_datetime(df['Drawing_Date_Time'], errors='coerce')
         df['Arrived_Date_Time'] = pd.to_datetime(df['Arrived_Date_Time'], errors='coerce')
         df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
         df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
+
+        # Calculate Journey Durations (New Addition to Table)
+        df['Journey_Transport_Min'] = (df['Arrived_Date_Time'] - df['Drawing_Date_Time']).dt.total_seconds() / 60
+        df['Journey_Loading_Min'] = (df['Sampling_Date_Time'] - df['Arrived_Date_Time']).dt.total_seconds() / 60
         
-        mappings = {"Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
-                    "Discrimination": {"1": "Patient (Routine)", "2": "Patient (STAT)", "3": "QC (Control)"},
-                    "Run": {"1": "1st run", "2": "Rerun"}}
+        # 5. New Additions: AU Parsing (Sub-units)
+        def parse_au(au_str):
+            if not au_str or pd.isna(au_str): return "N/A", "Unknown", "Unknown"
+            parts = str(au_str).split('-')
+            pos = parts[0] if len(parts) > 0 else "N/A"
+            mtype = parts[1] if len(parts) > 1 else "N/A"
+            sub = parts[2] if len(parts) > 2 else "0"
+            return pos, mtype, f"{mtype}-{sub}"
+
+        df[['AU_Position', 'AU_Class', 'AU_SubUnit_ID']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
+        
+        # 6. New Additions: Alarm Interpretation
+        df['Alarm_Meaning'] = df['Data_Alarm'].str.strip().apply(lambda x: ALARM_MAP.get(x, {"name": ""})['name'] if x else "")
+
+        # 7. Standard Mappings
+        mappings = {
+            "Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
+            "Discrimination": {"1": "Patient (Routine)", "2": "Patient (STAT)", "3": "QC (Control)"},
+            "Run": {"1": "1st run", "2": "Rerun"}
+        }
         for col in mappings:
             if col in df.columns: df[col] = df[col].astype(str).map(mappings[col]).fillna(df[col])
+            
         return df
     except Exception as e:
-        st.error(f"Processing Error: {e}"); return None
+        st.error(f"Processing Error: {e}")
+        return None
+
+def render_insight(title, obs, impact, pre):
+    st.markdown(f"""
+    <div style="background-color: #f0f2f6; padding: 20px; border-radius: 10px; border-left: 5px solid #0b41cd; margin-bottom: 20px;">
+        <h4 style="margin-top:0; color: #0b41cd;">🧠 Insight: {title}</h4>
+        <div style="display: flex; gap: 20px;">
+            <div style="flex: 1;"><strong>Observation</strong><br>{obs}</div>
+            <div style="flex: 1;"><strong>Impact</strong><br>{impact}</div>
+            <div style="flex: 1;"><strong>Prescription</strong><br>{pre}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # --- Sidebar ---
 with st.sidebar:
@@ -70,125 +124,60 @@ with st.sidebar:
         raw_df = process_data(uploaded_file.getvalue())
         if raw_df is not None:
             st.markdown("---")
+            st.subheader("📅 Filter View")
             min_d, max_d = raw_df['Arrived_Date_Time'].min().date(), raw_df['Arrived_Date_Time'].max().date()
-            sel_range = st.date_input("Date Range", [min_d, max_d])
-            sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("⚙️ **Engine Details**")
-    st.sidebar.markdown("- **Adaptive Engine:** v4.9\n- **Compatibility:** cobas pro\n- **Status:** Validated")
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("© 2026 **LabMesh.com**")
+            sel_range = st.date_input("Date Range", [min_d, max_d], min_value=min_d, max_value=max_d)
+            sel_cats = st.multiselect("Sample Types", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
 
 # --- Main App ---
-if uploaded_file and raw_df is not None:
-    mask = (raw_df['Arrived_Date_Time'].dt.date >= sel_range[0]) & (raw_df['Arrived_Date_Time'].dt.date <= sel_range[1]) & (raw_df['Discrimination'].isin(sel_cats))
+if uploaded_file and 'raw_df' in locals() and raw_df is not None:
+    # Handle Date Selection
+    start_d = sel_range[0]
+    end_d = sel_range[1] if len(sel_range) > 1 else start_d
+    mask = (raw_df['Arrived_Date_Time'].dt.date >= start_d) & \
+           (raw_df['Arrived_Date_Time'].dt.date <= end_d) & \
+           (raw_df['Discrimination'].isin(sel_cats))
     df = raw_df.loc[mask]
 
-    t = st.tabs(["📄 Raw Data", "📊 Test Analytics", "🧪 Quality Control", "⚠️ Error Detection", "🧠 Operational Insights"])
+    tabs = st.tabs(["📄 Raw Data", "🕒 Lab Journey", "🧪 Quality/Reruns", "⚠️ Alarms", "⚙️ Hardware Load"])
     
-    with t[0]:
+    with tabs[0]:
+        st.subheader("Unpivoted Instrument Data (Enriched)")
+        st.write("This table contains all unpivoted results plus new clinical intelligence columns.")
         st.dataframe(df, use_container_width=True)
-        st.download_button("📥 Export CSV", df.to_csv(index=False), "export.csv")
+        st.download_button("📥 Export CSV", df.to_csv(index=False), f"Enriched_{uploaded_file.name}")
 
-    with t[1]:
-        st.subheader("Throughput & Peak Capacity")
-        if 'Module' in df.columns and 'Sampling_Date_Time' in df.columns:
-            caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
-            util_df = df.copy().dropna(subset=['Sampling_Date_Time'])
-            util_df['Norm_Mod'] = util_df['Module'].apply(lambda x: next((k for k in caps if k in str(x)), "Other"))
-            util_df['S_Hour'], util_df['S_Date'] = util_df['Sampling_Date_Time'].dt.hour, util_df['Sampling_Date_Time'].dt.strftime('%Y-%m-%d')
-            hourly_util = util_df.groupby(['S_Date', 'S_Hour', 'Norm_Mod']).size().reset_index(name='Tests')
-            
-            sel_m = st.selectbox("View Hourly Throughput Pattern:", hourly_util['Norm_Mod'].unique().tolist())
-            st.plotly_chart(px.line(hourly_util[hourly_util['Norm_Mod'] == sel_m], x='S_Hour', y='Tests', color='S_Date', markers=True).update_layout(xaxis=dict(tickmode='linear', range=[0, 23])), use_container_width=True)
+    with tabs[1]:
+        st.subheader("Efficiency Tracker: The Lab Journey")
+        j_df = df.dropna(subset=['Journey_Transport_Min', 'Journey_Loading_Min'])
+        if not j_df.empty:
+            c1, c2 = st.columns(2)
+            c1.metric("Avg Transport", f"{j_df['Journey_Transport_Min'].mean():.1f} min")
+            c2.metric("Avg Loading", f"{j_df['Journey_Loading_Min'].mean():.1f} min")
+            st.plotly_chart(px.box(j_df, x='Discrimination', y='Journey_Loading_Min', color='Discrimination', title="Arrival to Sampling delay"))
+            render_insight("Process Bottlenecks", f"Avg loading delay: {j_df['Journey_Loading_Min'].mean():.1f} min.", "Delay impacts total Turnaround Time.", "Review buffer prioritization if STAT > 15m.")
 
-            cols = st.columns(len(caps))
-            peak_stats = []
-            for idx, (m_type, values) in enumerate(caps.items()):
-                m_max, m_prac = values
-                peak_val = hourly_util[hourly_util['Norm_Mod'] == m_type]['Tests'].max() if m_type in hourly_util['Norm_Mod'].values else 0
-                cols[idx].metric(f"{m_type} Peak", f"{peak_val} T/Hr", f"{((peak_val/m_prac)*100):.1f}% Capacity")
-                peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Practical': m_prac, 'Theoretical': m_max})
-            
-            st.write("#### 🚀 Peak Throughput vs. Instrument Capacity")
-            fig_peak = go.Figure()
-            fig_peak.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], marker_color='#0b41cd', text=[d['Peak'] for d in peak_stats], textposition='auto'))
-            for i, d in enumerate(peak_stats):
-                fig_peak.add_shape(type="line", x0=i-0.4, y0=d['Practical'], x1=i+0.4, y1=d['Practical'], line=dict(color="orange", width=3, dash="dash"))
-                fig_peak.add_shape(type="line", x0=i-0.4, y0=d['Theoretical'], x1=i+0.4, y1=d['Theoretical'], line=dict(color="red", width=3))
-            st.plotly_chart(fig_peak, use_container_width=True)
+    with tabs[2]:
+        st.subheader("First-Pass Yield")
+        counts = df['Run'].value_counts()
+        st.plotly_chart(px.pie(values=counts.values, names=counts.index, hole=0.5))
+        render_insight("Quality Yield", f"Rerun rate: {(counts.get('Rerun', 0)/len(df)*100):.1f}%", "Reruns increase reagent waste.", "Audit assays with >10% rerun rate.")
 
-        st.markdown("---")
-        p_df = df[df['Discrimination'].str.contains("Patient", na=False)].copy()
-        if not p_df.empty:
-            p_df['Hour'], p_df['Date'] = p_df['Arrived_Date_Time'].dt.hour, p_df['Arrived_Date_Time'].dt.strftime('%Y-%m-%d')
-            h_counts = p_df.groupby(['Date', 'Hour'])['Sample_ID'].nunique().reset_index(name='Samples')
-            st.plotly_chart(px.line(h_counts, x='Hour', y='Samples', color='Date', markers=True, title="24-Hour Sample Arrival Pattern").update_layout(xaxis=dict(tickmode='linear', range=[0, 23])), use_container_width=True)
+    with tabs[3]:
+        st.subheader("Alarm & Risk Analysis")
+        a_df = df[df['Alarm_Meaning'] != ""]
+        if not a_df.empty:
+            st.plotly_chart(px.treemap(a_df, path=['AU_Class', 'Alarm_Meaning'], color='Alarm_Meaning'))
+            render_insight("Clinical Risk", f"Top alarm: {a_df['Alarm_Meaning'].value_counts().idxmax()}", "Alarms compromise result accuracy.", "Focus training on frequent pre-analytical alarms.")
 
-    with t[2]:
-        st.subheader("Quality Control Precision & Timing")
-        q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
-        if not q_df.empty:
-            q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            st.plotly_chart(px.scatter(q_df, x='HF', y='Parameter', color='Parameter', title="QC Execution Matrix (24h)").update_layout(xaxis=dict(tickmode='linear', range=[0, 24])), use_container_width=True)
-            
-            q_df['Date'] = q_df['Arrived_Date_Time'].dt.date
-            qc_stats = q_df.groupby(['Date', 'Parameter', 'Sample_ID'])['Result_Numeric'].agg(Runs='count', Mean='mean', SD='std').reset_index()
-            qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2).map("{:.2f}%".format)
-            st.dataframe(qc_stats, use_container_width=True)
-            
-            st.markdown("---")
-            st.write("#### 📊 QC Stability Distribution (Split by Instrument Type)")
-            qc_c1, qc_c2 = st.columns(2)
-            with qc_c1:
-                st.write("**Chemistry & ISE (c 503 / ISE)**")
-                cc_df = q_df[q_df['Module'].str.contains("c 503|ISE", na=False)]
-                if not cc_df.empty: st.plotly_chart(px.box(cc_df, x='Parameter', y='Result_Numeric', color='Parameter'), use_container_width=True)
-            with qc_c2:
-                st.write("**Immunoassay (e 801 Combined)**")
-                ia_df = q_df[q_df['Module'].str.contains("e 801", na=False)]
-                if not ia_df.empty: st.plotly_chart(px.box(ia_df, x='Parameter', y='Result_Numeric', color='Parameter'), use_container_width=True)
-
-    with t[3]:
-        st.subheader("Error & Alarm Tracking")
-        if 'Data_Alarm' in df.columns:
-            errs = df[df['Data_Alarm'].str.strip() != ""].copy()
-            if not errs.empty:
-                st.plotly_chart(px.bar(errs.groupby(['Module', 'Data_Alarm']).size().reset_index(name='C').sort_values('C', ascending=False).head(20), x='Data_Alarm', y='C', color='Module', text='C', title="Top 20 System Alarms"), use_container_width=True)
-                st.dataframe(errs[['Arrived_Date_Time', 'Sample_ID', 'Parameter', 'Module', 'Data_Alarm']], use_container_width=True)
-
-    with t[4]:
-        st.subheader("🧠 Prescriptive Operational Insights")
-        i1, i2 = st.columns(2)
-        with i1:
-            st.info("📊 **Throughput & Capacity Strategy**")
-            for d in peak_stats:
-                if d['Peak'] > d['Practical']: st.warning(f"🟠 **{d['Module']} Peak Stress:** Consider smaller batches to stay within mechanical limits.")
-        with i2:
-            st.info("⚖️ **Internal Assay Balancing**")
-            if 'Module' in df.columns:
-                mod_counts = df['Module'].value_counts()
-                for base in ["e 801", "c 503"]:
-                    twins = [m for m in mod_counts.index if base in str(m)]
-                    if len(twins) > 1:
-                        ratio = mod_counts[twins[0]] / mod_counts[twins[1]]
-                        if ratio > 1.25 or ratio < 0.75: st.warning(f"⚖️ **Skew Detected ({base}):** Review internal Assay Mapping for balanced mechanical wear.")
-
-        st.markdown("---")
-        st.write("#### ⚖️ Mechanical Load per Sub-Module")
-        st.plotly_chart(px.bar(df['Module'].value_counts().reset_index(), x='Module', y='count', color='Module', title="Total Workload Distribution"), use_container_width=True)
-
-        st.write("#### 🧪 e 801 Assay Distribution")
-        e_df = df[df['Module'].str.contains("e 801", na=False)]
-        if not e_df.empty:
-            e_dist = e_df.groupby(['Parameter', 'Module']).size().reset_index(name='C')
-            st.plotly_chart(px.bar(e_dist, x='Parameter', y='C', color='Module', barmode='group', title="e 801 Assay Mapping Breakdown"), use_container_width=True)
-
-        st.write("#### 🔄 Quality Analysis")
-        rerun_v = (len(df[df['Run'] == 'Rerun']) / len(df) * 100) if len(df) > 0 else 0
-        st.write(f"**Rerun Rate:** {rerun_v:.1f}%")
-
+    with tabs[4]:
+        st.subheader("Mechanical Load Balancing")
+        load = df['AU_SubUnit_ID'].value_counts().reset_index()
+        load.columns = ['Unit', 'Count']
+        st.plotly_chart(px.bar(load, x='Unit', y='Count', color='Unit'))
+        if len(load) > 1:
+            imb = load['Count'].max() / load['Count'].min()
+            if imb > 1.2:
+                render_insight("Mechanical Skew", f"Unit imbalance: {imb:.1f}x", "Uneven wear leads to premature failure.", "Re-map high-volume tests to balance load.")
 else:
-    st.title("Welcome to converterPRO")
-    st.info("System Ready. Please upload a file in the sidebar.")
+    st.info("👈 Upload a CSV to begin.")
