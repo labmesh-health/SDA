@@ -126,11 +126,13 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             h_util = u_df.groupby([u_df['Sampling_Date_Time'].dt.date, 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
             
-            # Line Chart
-            sel_m = st.selectbox("View pattern for:", h_util['AU_Class'].unique().tolist())
-            st.plotly_chart(px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', markers=True, color_discrete_sequence=['#0b41cd']), use_container_width=True)
+            # Line Chart with 0-23 X-axis scale
+            sel_m = st.selectbox("View sampling pattern for:", h_util['AU_Class'].unique().tolist())
+            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', markers=True, color_discrete_sequence=['#0b41cd'], title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
+            fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
+            st.plotly_chart(fig_line, use_container_width=True)
             
-            # Peak vs Capacity Bar Chart (Restored)
+            # Peak vs Capacity Bar Chart
             caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
             peak_stats = []
             for m_type, (m_max, m_prac) in caps.items():
@@ -150,6 +152,22 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             else:
                 render_insight("Throughput Efficiency", "All modules are operating within practical capacity.", "Workflow and TAT should remain stable without bottlenecks.", "Optimal loading rate detected.", "success")
         else: st.info("No sampling data available for throughput analysis.")
+        
+        st.markdown("---")
+        st.subheader("Total Test Arrival Pattern (24h)")
+        a_df = df.dropna(subset=['Arrived_Date_Time']).copy()
+        if not a_df.empty:
+            a_df['A_Hour'] = a_df['Arrived_Date_Time'].dt.hour
+            a_df['A_Date'] = a_df['Arrived_Date_Time'].dt.date
+            arr_counts = a_df.groupby(['A_Date', 'A_Hour']).size().reset_index(name='Total Tests')
+            
+            # Simple aggregate line chart of total arrivals
+            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', color='A_Date', markers=True, title="Hourly Total Volume of Arriving Tests")
+            fig_arr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
+            st.plotly_chart(fig_arr, use_container_width=True)
+            
+            render_insight("Arrival vs Throughput Gap", f"Peak arrival hour received {arr_counts['Total Tests'].max()} total tests.", "A massive spike in arrivals compared to sampling capacity creates a backlog in the pre-analytical buffer.", "Compare this arrival peak against your instrument sampling peak above to measure backlogs.", "info")
+        else: st.info("No arrival data available for analysis.")
 
     with t[2]:
         st.subheader("QC Precision & Stability")
@@ -166,7 +184,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             with c1: st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("c 503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="Chemistry Stability"), use_container_width=True)
             with c2: st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("e 801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="IA Stability"), use_container_width=True)
             
-            # Explicitly listing assays with CV > 5%
             bad_cv_df = qc_stats[qc_stats['CV%'] > 5]
             if not bad_cv_df.empty:
                 bad_assays = ", ".join(bad_cv_df['Parameter'].unique())
