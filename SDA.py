@@ -126,13 +126,14 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             h_util = u_df.groupby([u_df['Sampling_Date_Time'].dt.date, 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
             
-            # Line Chart with 0-23 X-axis scale
+            # Line Chart with labels
             sel_m = st.selectbox("View sampling pattern for:", h_util['AU_Class'].unique().tolist())
-            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', markers=True, color_discrete_sequence=['#0b41cd'], title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
+            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', text='Tests', markers=True, color_discrete_sequence=['#0b41cd'], title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
+            fig_line.update_traces(textposition="top center")
             fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_line, use_container_width=True)
             
-            # Peak vs Capacity Bar Chart
+            # Peak vs Capacity Bar Chart with labels
             caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
             peak_stats = []
             for m_type, (m_max, m_prac) in caps.items():
@@ -140,7 +141,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                 peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Prac': m_prac, 'Theo': m_max})
             
             fig_p = go.Figure()
-            fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], name="Actual Peak", marker_color='#0b41cd'))
+            fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], text=[int(d['Peak']) for d in peak_stats], textposition='auto', name="Actual Peak", marker_color='#0b41cd'))
             for i, d in enumerate(peak_stats):
                 fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
                 fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
@@ -161,8 +162,9 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             a_df['A_Date'] = a_df['Arrived_Date_Time'].dt.date
             arr_counts = a_df.groupby(['A_Date', 'A_Hour']).size().reset_index(name='Total Tests')
             
-            # Simple aggregate line chart of total arrivals
-            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', color='A_Date', markers=True, title="Hourly Total Volume of Arriving Tests")
+            # Arrival line chart with labels
+            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', text='Total Tests', color='A_Date', markers=True, title="Hourly Total Volume of Arriving Tests")
+            fig_arr.update_traces(textposition="top center")
             fig_arr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_arr, use_container_width=True)
             
@@ -174,7 +176,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
             q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            st.plotly_chart(px.scatter(q_df, x='HF', y='Parameter', color='Parameter', title="QC Timing Matrix (24h)"), use_container_width=True)
+            
+            # QC Scatter with labels
+            fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', text='Result_Numeric', title="QC Timing Matrix (24h)")
+            fig_qc.update_traces(textposition="top center")
+            st.plotly_chart(fig_qc, use_container_width=True)
             
             qc_stats = q_df.groupby(['Parameter', 'Sample_ID'])['Result_Numeric'].agg(Mean='mean', SD='std').reset_index()
             qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2)
@@ -197,12 +203,19 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         st.subheader("Rerun & Yield Analysis")
         r_counts = df['Run'].value_counts()
         if not r_counts.empty:
-            st.plotly_chart(px.pie(values=r_counts.values, names=r_counts.index, hole=0.5, color_discrete_map={'1st run': '#0b41cd', 'Rerun': '#f44336'}), use_container_width=True)
+            # Pie Chart with explicit labels
+            fig_pie = px.pie(values=r_counts.values, names=r_counts.index, hole=0.5, color_discrete_map={'1st run': '#0b41cd', 'Rerun': '#f44336'})
+            fig_pie.update_traces(textinfo='percent+value+label', textposition='inside')
+            st.plotly_chart(fig_pie, use_container_width=True)
             
             rerun_only = df[df['Run'] == 'Rerun']
             if not rerun_only.empty:
                 rerun_df = rerun_only.groupby('Parameter').size().reset_index(name='Count').sort_values('Count', ascending=False)
-                st.plotly_chart(px.bar(rerun_df, x='Parameter', y='Count', title="Top Rerun Assays", color_discrete_sequence=['#f44336']), use_container_width=True)
+                # Bar Chart with labels
+                fig_r_bar = px.bar(rerun_df, x='Parameter', y='Count', text='Count', title="Top Rerun Assays", color_discrete_sequence=['#f44336'])
+                fig_r_bar.update_traces(textposition='auto')
+                st.plotly_chart(fig_r_bar, use_container_width=True)
+                
                 render_insight("Yield Efficiency", f"Rerun rate is {(len(rerun_only)/len(df)*100):.1f}%.", "Reruns double reagent costs and delay TAT.", f"Investigate '{rerun_df.iloc[0]['Parameter']}' for frequent errors.", "critical")
             else:
                 render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "System is performing optimally.", "success")
@@ -212,7 +225,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         st.subheader("Analytical Risk Alarms")
         err_df = df[df['Data_Alarm'].str.strip() != ""].copy()
         if not err_df.empty:
-            st.plotly_chart(px.bar(err_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='C'), x='Data_Alarm', y='C', color='Module'), use_container_width=True)
+            # Bar Chart with labels
+            err_bar = px.bar(err_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='C'), x='Data_Alarm', y='C', text='C', color='Module')
+            err_bar.update_traces(textposition='auto')
+            st.plotly_chart(err_bar, use_container_width=True)
+            
             render_insight("Risk Monitoring", f"{len(err_df)} flags detected.", "Flags indicate compromised results.", "Check 'Short' flags immediately.", "critical")
         else:
             render_insight("Alarm Status", "Zero flags detected.", "Results are analytically clean.", "Continue standard monitoring.", "success")
@@ -222,7 +239,10 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         load = df['AU_SubUnit'].value_counts().reset_index()
         load.columns = ['Unit', 'Count']
         if not load.empty:
-            st.plotly_chart(px.bar(load, x='Unit', y='Count', color='Unit', color_discrete_sequence=px.colors.qualitative.Bold), use_container_width=True)
+            # Bar Chart with labels
+            fig_load = px.bar(load, x='Unit', y='Count', text='Count', color='Unit', color_discrete_sequence=px.colors.qualitative.Bold)
+            fig_load.update_traces(textposition='auto')
+            st.plotly_chart(fig_load, use_container_width=True)
             
             if len(load) > 1:
                 imb = load['Count'].max() / load['Count'].min()
