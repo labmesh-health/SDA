@@ -10,7 +10,7 @@ from datetime import datetime
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
 
-# --- Constants & Mappings ---
+# --- Clinical Knowledge Base (from Documentation) ---
 ALARM_MAP = {
     ">v": {"name": "Above Technical Limit", "sev": "High", "msg": "Exceeds measurable range. Dilution required."},
     "<v": {"name": "Below Technical Limit", "sev": "High", "msg": "Result below measurable range."},
@@ -30,6 +30,7 @@ def process_data(file_bytes):
     row0, header_row = raw_data[0], raw_data[1]
 
     try:
+        # Find indices
         draw_idx = header_row.index("Drawing_Date_Time")
         cup_idx = header_row.index("Sample_Cup")
         start_col = header_row.index("Result") 
@@ -90,9 +91,9 @@ def process_data(file_bytes):
 def render_insight(title, obs, impact, pre, status="info"):
     colors = {"info": "#0b41cd", "warning": "#ff9800", "critical": "#f44336", "success": "#4caf50"}
     st.markdown(f"""<div style="background-color: #ffffff; padding: 20px; border-radius: 10px; border-left: 10px solid {colors.get(status)}; margin-top: 10px; margin-bottom: 30px; border: 1px solid #eee;">
-        <h4 style="margin-top:0; color: {colors.get(status)};">🔍 Insight: {title}</h4>
+        <h4 style="margin-top:0; color: {colors.get(status)};">🔎 Insight Card: {title}</h4>
         <div style="display: flex; gap: 20px;"><div style="flex: 1;"><strong>Observation</strong><br>{obs}</div>
-        <div style="flex: 1;"><strong>Impact</strong><br>{impact}</div><div style="flex: 1;"><strong>Prescription</strong><br>{pre}</div></div></div>""", unsafe_allow_html=True)
+        <div style="flex: 1;"><strong>Impact</strong><br>{impact}</div><div style="flex: 1;"><strong>Checklist</strong><br>{pre}</div></div></div>""", unsafe_allow_html=True)
 
 # --- Sidebar ---
 with st.sidebar:
@@ -119,22 +120,20 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         st.download_button("📥 Export CSV", df.to_csv(index=False), f"Enriched_{uploaded_file.name}")
 
     with t[1]:
-        st.subheader("Laboratory Utilization Patterns")
+        st.subheader("Laboratory Throughput & Peaks")
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
         if not u_df.empty:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             h_util = u_df.groupby([u_df['Sampling_Date_Time'].dt.date, 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
-            sel_m = st.selectbox("Filter Hourly pattern by Module Class:", h_util['AU_Class'].unique().tolist())
+            sel_m = st.selectbox("View pattern for:", h_util['AU_Class'].unique().tolist())
             st.plotly_chart(px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', markers=True, color_discrete_sequence=['#0b41cd']), use_container_width=True)
-            
-            peak_val = h_util['Tests'].max()
-            render_insight("Throughput Analysis", f"System peaked at {peak_val} tests/hour.", "High peaks correlate with increased turnaround time (TAT).", "Review staffing or rack loading during this period.", "info")
+            render_insight("Throughput Analysis", f"Peak hour processed {h_util['Tests'].max()} tests.", "High peaks increase wait times for STAT samples.", "Check if rack loading can be balanced earlier in the day.", "success")
 
     with t[2]:
-        st.subheader("Quality Control Precision")
+        st.subheader("QC Precision & Stability")
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
-            # RESTORED COLORS FROM INITIAL CODE
+            # RESTORED INITIAL COLORS
             q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
             st.plotly_chart(px.scatter(q_df, x='HF', y='Parameter', color='Parameter', title="QC Execution Matrix (24h)"), use_container_width=True)
             
@@ -142,22 +141,19 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2)
             st.dataframe(qc_stats, use_container_width=True)
             
-            # RESTORED BOXPLOTS WITH ORIGINAL GROUPING
             c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("c 503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="Chemistry Stability"), use_container_width=True)
-            with c2:
-                st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("e 801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="IA Stability"), use_container_width=True)
+            with c1: st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("c 503|ISE")], x='Parameter', y='Result_Numeric', color='Parameter', title="Chemistry Stability"), use_container_width=True)
+            with c2: st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("e 801")], x='Parameter', y='Result_Numeric', color='Parameter', title="IA Stability"), use_container_width=True)
             
             if qc_stats['CV%'].max() > 5:
-                render_insight("Precision Alert", "Some parameters exceed 5% CV.", "Potential calibration drift detected.", "Perform maintenance on probes or recalibrate.", "warning")
+                render_insight("QC Drift Detection", "Some parameters exceed 5% CV.", "Indicates precision issues or probe wear.", "Recalibrate or perform probe maintenance.", "warning")
             else:
-                render_insight("QC Status", "All CV% values are within optimal limits.", "No precision issues detected.", "System is stable.", "success")
+                render_insight("QC Status", "All parameters stable.", "Precision is within technical limits.", "No action needed.", "success")
         else:
             st.info("No QC data found.")
 
     with t[3]:
-        st.subheader("Rerun & Yield Management")
+        st.subheader("Rerun & Yield Analysis")
         r_counts = df['Run'].value_counts()
         st.plotly_chart(px.pie(values=r_counts.values, names=r_counts.index, hole=0.5, color_discrete_map={'1st run': '#0b41cd', 'Rerun': '#f44336'}), use_container_width=True)
         
@@ -165,29 +161,30 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         if not rerun_only.empty:
             rerun_df = rerun_only.groupby('Parameter').size().reset_index(name='Count').sort_values('Count', ascending=False)
             st.plotly_chart(px.bar(rerun_df, x='Parameter', y='Count', title="Top Rerun Assays", marker_color='#f44336'), use_container_width=True)
-            render_insight("Yield Loss", f"Rerun rate is {(len(rerun_only)/len(df)*100):.1f}%.", "Reruns double reagent costs.", f"Check {rerun_df.iloc[0]['Parameter']} for probe issues.", "critical")
+            render_insight("Yield Efficiency", f"Rerun rate is {(len(rerun_only)/len(df)*100):.1f}%.", "Reruns increase reagent waste and TAT.", f"Investigate {rerun_df.iloc[0]['Parameter']} for flags.", "critical")
         else:
-            render_insight("Yield Status", "100% First-Pass Yield.", "No reagent waste detected.", "Operations are highly efficient.", "success")
+            render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "Operational excellence detected.", "success")
 
     with t[4]:
         st.subheader("Analytical Risk Alarms")
         err_df = df[df['Data_Alarm'].str.strip() != ""].copy()
         if not err_df.empty:
-            st.plotly_chart(px.bar(err_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='C'), x='Data_Alarm', y='C', color='Module', color_discrete_sequence=px.colors.qualitative.T10), use_container_width=True)
-            render_insight("Alarm Detection", f"{len(err_df)} flags found.", "Alarms indicate compromised results.", "Check 'Short' flags for sample volume.", "critical")
+            st.plotly_chart(px.bar(err_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='C'), x='Data_Alarm', y='C', color='Module'), use_container_width=True)
+            render_insight("Alarm Monitoring", f"{len(err_df)} flags detected.", "Flags indicate unreliable results.", "Investigate 'Short' flags immediately.", "critical")
         else:
-            render_insight("Alarm Status", "Zero flags detected.", "System is running clean.", "No action required.", "success")
+            render_insight("Alarm Status", "Zero flags detected.", "Results are analytically clean.", "Continue monitoring.", "success")
 
     with t[5]:
-        st.subheader("Hardware Load Analysis")
+        st.subheader("Sub-Module Load Balancing")
         load = df['AU_SubUnit'].value_counts().reset_index()
         load.columns = ['Unit', 'Count']
-        st.plotly_chart(px.bar(load, x='Unit', y='Count', color='Unit', color_discrete_sequence=px.colors.qualitative.Vivid), use_container_width=True)
+        st.plotly_chart(px.bar(load, x='Unit', y='Count', color='Unit', color_discrete_sequence=px.colors.qualitative.Bold), use_container_width=True)
         
-        imb = load['Count'].max() / load['Count'].min() if len(load)>1 else 1
-        if imb > 1.25:
-            render_insight("Hardware Skew", f"Load imbalance of {imb:.1f}x.", "Uneven wear reduces probe lifespan.", "Re-map assays to balance the load.", "warning")
-        else:
-            render_insight("Mechanical Status", "Workload is balanced.", "Mechanical wear is distributed evenly.", "System configuration is optimal.", "success")
+        if len(load) > 1:
+            imb = load['Count'].max() / load['Count'].min()
+            if imb > 1.2:
+                render_insight("Hardware Skew", f"Imbalance of {imb:.1f}x.", "Uneven wear reduces module lifespan.", "Re-map assays to balance the track.", "warning")
+            else:
+                render_insight("Load Balance", "Workload is balanced.", "Even mechanical wear.", "Mapping is optimal.", "success")
 else:
-    st.info("👈 Upload a CSV in the sidebar to begin.")
+    st.info("👈 Upload a CSV to begin.")
