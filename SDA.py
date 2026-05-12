@@ -106,6 +106,13 @@ with st.sidebar:
             min_d, max_d = raw_df['Arrived_Date_Time'].min().date(), raw_df['Arrived_Date_Time'].max().date()
             sel_range = st.date_input("Date Range", [min_d, max_d], min_value=min_d, max_value=max_d)
             sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
+    
+    # Engine Details & Copyright Information
+    st.markdown("---")
+    st.caption("⚙️ **Engine Details**")
+    st.markdown("- **Adaptive Engine:** v7.0\n- **Compatibility:** cobas pro\n- **Status:** Validated")
+    st.markdown("---")
+    st.markdown("© 2026 **LabMesh.com**")
 
 # --- Main App ---
 if uploaded_file and 'raw_df' in locals() and raw_df is not None:
