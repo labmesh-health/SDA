@@ -120,14 +120,35 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         st.download_button("📥 Export CSV", df.to_csv(index=False), f"Enriched_{uploaded_file.name}")
 
     with t[1]:
-        st.subheader("Laboratory Throughput Patterns")
+        st.subheader("Laboratory Throughput & Peak Stress")
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
         if not u_df.empty:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             h_util = u_df.groupby([u_df['Sampling_Date_Time'].dt.date, 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
+            
+            # Line Chart
             sel_m = st.selectbox("View pattern for:", h_util['AU_Class'].unique().tolist())
             st.plotly_chart(px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', markers=True, color_discrete_sequence=['#0b41cd']), use_container_width=True)
-            render_insight("Throughput Analysis", f"Peak hour processed {h_util['Tests'].max()} tests.", "High peaks correlate with TAT delays.", "Review staff levels during peak hours.", "success")
+            
+            # Peak vs Capacity Bar Chart (Restored)
+            caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
+            peak_stats = []
+            for m_type, (m_max, m_prac) in caps.items():
+                peak_val = h_util[h_util['AU_Class'].str.contains(m_type, na=False)]['Tests'].max() if any(m_type in str(x) for x in h_util['AU_Class']) else 0
+                peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Prac': m_prac, 'Theo': m_max})
+            
+            fig_p = go.Figure()
+            fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], name="Actual Peak", marker_color='#0b41cd'))
+            for i, d in enumerate(peak_stats):
+                fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
+                fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
+            st.plotly_chart(fig_p.update_layout(title="Peak Stress vs Module Capacity (Orange = Practical Limit)"), use_container_width=True)
+
+            stress_mod = [d['Module'] for d in peak_stats if d['Peak'] > d['Prac']]
+            if stress_mod:
+                render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
+            else:
+                render_insight("Throughput Efficiency", "All modules are operating within practical capacity.", "Workflow and TAT should remain stable without bottlenecks.", "Optimal loading rate detected.", "success")
         else: st.info("No sampling data available for throughput analysis.")
 
     with t[2]:
@@ -145,10 +166,13 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             with c1: st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("c 503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="Chemistry Stability"), use_container_width=True)
             with c2: st.plotly_chart(px.box(q_df[q_df['AU_Class'].str.contains("e 801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="IA Stability"), use_container_width=True)
             
-            if qc_stats['CV%'].max() > 5:
-                render_insight("QC Drift Detection", "Some parameters exceed 5% CV.", "Indicates precision issues or probe wear.", "Recalibrate or perform probe maintenance.", "warning")
+            # Explicitly listing assays with CV > 5%
+            bad_cv_df = qc_stats[qc_stats['CV%'] > 5]
+            if not bad_cv_df.empty:
+                bad_assays = ", ".join(bad_cv_df['Parameter'].unique())
+                render_insight("QC Drift Detection", f"The following assays exceed 5% CV: **{bad_assays}**", "Indicates precision issues, reagent instability, or probe wear.", f"Recalibrate or perform probe maintenance on {bad_assays}.", "warning")
             else:
-                render_insight("QC Status", "All parameters stable.", "Precision is within technical limits.", "No action needed.", "success")
+                render_insight("QC Status", "All parameters show stable CV% below 5%.", "Precision is within optimal technical limits.", "No action needed.", "success")
         else:
             st.info("No QC data found.")
 
@@ -161,9 +185,8 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             rerun_only = df[df['Run'] == 'Rerun']
             if not rerun_only.empty:
                 rerun_df = rerun_only.groupby('Parameter').size().reset_index(name='Count').sort_values('Count', ascending=False)
-                # FIXED SYNTAX ERROR HERE: Changed marker_color to color_discrete_sequence
                 st.plotly_chart(px.bar(rerun_df, x='Parameter', y='Count', title="Top Rerun Assays", color_discrete_sequence=['#f44336']), use_container_width=True)
-                render_insight("Yield Efficiency", f"Rerun rate is {(len(rerun_only)/len(df)*100):.1f}%.", "Reruns increase reagent waste and TAT.", f"Investigate {rerun_df.iloc[0]['Parameter']} for flags.", "critical")
+                render_insight("Yield Efficiency", f"Rerun rate is {(len(rerun_only)/len(df)*100):.1f}%.", "Reruns double reagent costs and delay TAT.", f"Investigate '{rerun_df.iloc[0]['Parameter']}' for frequent errors.", "critical")
             else:
                 render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "System is performing optimally.", "success")
         else: st.info("No run data found.")
