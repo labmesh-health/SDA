@@ -175,22 +175,20 @@ def create_ppt(figs_dict):
     prs = Presentation()
     for title, fig in figs_dict.items():
         
-        # --- THE FIX: Force a solid white background and standard theme for the export ---
+        # 1. Strip all Streamlit/transparent themes and force pure white HEX codes
+        fig.layout.paper_bgcolor = '#ffffff'
+        fig.layout.plot_bgcolor = '#ffffff'
         fig.update_layout(
             template="plotly_white",
-            paper_bgcolor="rgba(255, 255, 255, 1)", 
-            plot_bgcolor="rgba(255, 255, 255, 1)",
-            font=dict(color="black")
+            font=dict(color="#000000")
         )
+        
+        # 2. Add scale=2 to bypass Kaleido color-dropping bugs and double the resolution
+        img_bytes = fig.to_image(format="png", engine="kaleido", width=1000, height=550, scale=2)
+        img_stream = io.BytesIO(img_bytes)
         
         slide = prs.slides.add_slide(prs.slide_layouts[5])
         slide.shapes.title.text = title
-        
-        # Convert Plotly figure to image bytes
-        img_bytes = fig.to_image(format="png", engine="kaleido", width=1000, height=550)
-        img_stream = io.BytesIO(img_bytes)
-        
-        # Add to PPT (centered)
         slide.shapes.add_picture(img_stream, Inches(0.5), Inches(1.5), width=Inches(9))
         
     ppt_stream = io.BytesIO()
@@ -218,7 +216,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v8.2\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v8.3\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -229,7 +227,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     start_d, end_d = sel_range[0], (sel_range[1] if len(sel_range) > 1 else sel_range[0])
     mask = (raw_df['Arrived_Date_Time'].dt.date >= start_d) & (raw_df['Arrived_Date_Time'].dt.date <= end_d) & (raw_df['Discrimination'].isin(sel_cats))
     
-    # Apply filters and run PHI redaction if toggled
     df = raw_df.loc[mask].copy()
     if scrub_phi:
         for col in df.columns:
@@ -247,18 +244,17 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
         if not u_df.empty:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
-            u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date
+            # Convert to string to force explicit distinct colors per day
+            u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
             h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
             
             sel_m = st.selectbox("View sampling pattern for:", h_util['AU_Class'].unique().tolist())
-            # Color is now mapped directly to S_Date to show distinct lines per day
-            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
+            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=px.colors.qualitative.Vivid, title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
             fig_line.update_traces(textposition="top center")
             fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_line, use_container_width=True)
             export_figs["Instrument Sampling Rate"] = fig_line
             
-            # Auto-detect Pro vs Pure to apply correct limits dynamically
             is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_Class'])
             
             if is_pure:
@@ -294,10 +290,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         a_df = df.dropna(subset=['Arrived_Date_Time']).copy()
         if not a_df.empty:
             a_df['A_Hour'] = a_df['Arrived_Date_Time'].dt.hour
-            a_df['A_Date'] = a_df['Arrived_Date_Time'].dt.date
+            # Convert to string for discrete color mapping
+            a_df['A_Date'] = a_df['Arrived_Date_Time'].dt.date.astype(str)
             arr_counts = a_df.groupby(['A_Date', 'A_Hour']).size().reset_index(name='Total Tests')
             
-            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', text='Total Tests', color='A_Date', markers=True, title="Hourly Total Volume of Arriving Tests")
+            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', text='Total Tests', color='A_Date', markers=True, color_discrete_sequence=px.colors.qualitative.Vivid, title="Hourly Total Volume of Arriving Tests")
             fig_arr.update_traces(textposition="top center")
             fig_arr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_arr, use_container_width=True)
@@ -309,7 +306,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
             q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', title="QC Timing Matrix (24h)")
+            fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', color_discrete_sequence=px.colors.qualitative.Alphabet, title="QC Timing Matrix (24h)")
             st.plotly_chart(fig_qc, use_container_width=True)
             export_figs["QC Timing Matrix"] = fig_qc
             
@@ -319,11 +316,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             
             c1, c2 = st.columns(2)
             with c1: 
-                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="Chemistry Stability")
+                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=px.colors.qualitative.Alphabet, title="Chemistry Stability")
                 st.plotly_chart(fig_chem, use_container_width=True)
                 export_figs["Chemistry QC Stability"] = fig_chem
             with c2: 
-                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="IA Stability")
+                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=px.colors.qualitative.Alphabet, title="IA Stability")
                 st.plotly_chart(fig_ia, use_container_width=True)
                 export_figs["Immunoassay QC Stability"] = fig_ia
             
@@ -368,7 +365,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             st.plotly_chart(fig_type, use_container_width=True)
             export_figs["Error Profile"] = fig_type
 
-            err_bar = px.bar(err_df.groupby(['Module', 'Alarm_Code']).size().reset_index(name='C').sort_values('C', ascending=False).head(25), x='Alarm_Code', y='C', text='C', color='Module', title="Top 25 System Alarms Triggered")
+            err_bar = px.bar(err_df.groupby(['Module', 'Alarm_Code']).size().reset_index(name='C').sort_values('C', ascending=False).head(25), x='Alarm_Code', y='C', text='C', color='Module', color_discrete_sequence=px.colors.qualitative.Safe, title="Top 25 System Alarms Triggered")
             err_bar.update_traces(textposition='auto')
             st.plotly_chart(err_bar, use_container_width=True)
             export_figs["System Alarms"] = err_bar
