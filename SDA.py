@@ -138,7 +138,6 @@ def process_data(file_bytes):
         def parse_au(au_str):
             if not au_str or pd.isna(au_str): return "N/A", "Unknown", "Unknown"
             au_str = str(au_str).strip()
-            # Handle Pure vs Pro format
             if '-' in au_str:
                 parts = au_str.split('-')
                 pos, mtype = parts[0], (parts[1] if len(parts) > 1 else "N/A")
@@ -198,10 +197,15 @@ with st.sidebar:
             min_d, max_d = raw_df['Arrived_Date_Time'].min().date(), raw_df['Arrived_Date_Time'].max().date()
             sel_range = st.date_input("Date Range", [min_d, max_d], min_value=min_d, max_value=max_d)
             sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
+            
+            # Privacy scrub feature
+            st.markdown("---")
+            st.subheader("🛡️ Privacy & Compliance")
+            scrub_phi = st.checkbox("Scrub Patient Data (PHI)", value=True, help="Replaces text in comment fields with [REDACTED] to protect patient privacy.")
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v8.1\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v8.2\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -211,7 +215,13 @@ export_figs = {}
 if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     start_d, end_d = sel_range[0], (sel_range[1] if len(sel_range) > 1 else sel_range[0])
     mask = (raw_df['Arrived_Date_Time'].dt.date >= start_d) & (raw_df['Arrived_Date_Time'].dt.date <= end_d) & (raw_df['Discrimination'].isin(sel_cats))
-    df = raw_df.loc[mask]
+    
+    # Apply filters and run PHI redaction if toggled
+    df = raw_df.loc[mask].copy()
+    if scrub_phi:
+        for col in df.columns:
+            if 'Comment' in col:
+                df[col] = df[col].apply(lambda x: "[REDACTED]" if pd.notna(x) and str(x).strip() != "" else x)
 
     t = st.tabs(["📄 Raw Data", "📊 Throughput", "🧪 Quality Control", "🔄 Reruns", "⚠️ Alarms & Risk", "⚙️ Hardware Load"])
     
@@ -224,10 +234,12 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
         if not u_df.empty:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
-            h_util = u_df.groupby([u_df['Sampling_Date_Time'].dt.date, 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
+            u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date
+            h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
             
             sel_m = st.selectbox("View sampling pattern for:", h_util['AU_Class'].unique().tolist())
-            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', text='Tests', markers=True, color_discrete_sequence=['#0b41cd'], title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
+            # Color is now mapped directly to S_Date to show distinct lines per day
+            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
             fig_line.update_traces(textposition="top center")
             fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_line, use_container_width=True)
@@ -237,10 +249,8 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_Class'])
             
             if is_pure:
-                # Cobas Pure Limits (c 303 Photometric = 450 max, ISE = 450 max)
                 caps = {"c 303": (450, 360), "ISE": (450, 360), "e 402": (120, 100), "EFLW": (0,0)}
             else:
-                # Cobas Pro Limits
                 caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275), "EFLW": (0,0)}
             
             peak_stats = []
