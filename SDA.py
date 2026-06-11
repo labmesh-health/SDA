@@ -12,6 +12,9 @@ from pptx.util import Inches
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
 
+# --- Custom Professional Color Palette ---
+LAB_COLORS = ['#0b41cd', '#009688', '#ff9800', '#673ab7', '#e91e63', '#00bcd4', '#4caf50', '#ffc107', '#3f51b5', '#795548', '#607d8b', '#f44336']
+
 # --- Comprehensive Clinical Knowledge Base (Roche Pure & Pro) ---
 ALARM_MAP = {
     ">Abs": {"name": "ABS over", "sev": "High", "msg": "Detected foam or air aspiration, or absorbance value exceeded 3.3. Check for sample integrity.", "type": "Analytical", "action": "Check sample for bubbles/foam. Review reaction curve."},
@@ -175,7 +178,6 @@ def create_ppt(figs_dict):
     prs = Presentation()
     for title, fig in figs_dict.items():
         
-        # 1. Strip all Streamlit/transparent themes and force pure white HEX codes
         fig.layout.paper_bgcolor = '#ffffff'
         fig.layout.plot_bgcolor = '#ffffff'
         fig.update_layout(
@@ -183,7 +185,6 @@ def create_ppt(figs_dict):
             font=dict(color="#000000")
         )
         
-        # 2. Add scale=2 to bypass Kaleido color-dropping bugs and double the resolution
         img_bytes = fig.to_image(format="png", engine="kaleido", width=1000, height=550, scale=2)
         img_stream = io.BytesIO(img_bytes)
         
@@ -209,14 +210,13 @@ with st.sidebar:
             sel_range = st.date_input("Date Range", [min_d, max_d], min_value=min_d, max_value=max_d)
             sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
             
-            # Privacy scrub feature
             st.markdown("---")
             st.subheader("🛡️ Privacy & Compliance")
             scrub_phi = st.checkbox("Scrub Patient Data (PHI)", value=True, help="Replaces text in comment fields with [REDACTED] to protect patient privacy.")
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v8.3\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v8.4\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -244,12 +244,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
         if not u_df.empty:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
-            # Convert to string to force explicit distinct colors per day
             u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
             h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
             
             sel_m = st.selectbox("View sampling pattern for:", h_util['AU_Class'].unique().tolist())
-            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=px.colors.qualitative.Vivid, title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
+            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=LAB_COLORS, title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
             fig_line.update_traces(textposition="top center")
             fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_line, use_container_width=True)
@@ -290,11 +289,10 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         a_df = df.dropna(subset=['Arrived_Date_Time']).copy()
         if not a_df.empty:
             a_df['A_Hour'] = a_df['Arrived_Date_Time'].dt.hour
-            # Convert to string for discrete color mapping
             a_df['A_Date'] = a_df['Arrived_Date_Time'].dt.date.astype(str)
             arr_counts = a_df.groupby(['A_Date', 'A_Hour']).size().reset_index(name='Total Tests')
             
-            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', text='Total Tests', color='A_Date', markers=True, color_discrete_sequence=px.colors.qualitative.Vivid, title="Hourly Total Volume of Arriving Tests")
+            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', text='Total Tests', color='A_Date', markers=True, color_discrete_sequence=LAB_COLORS, title="Hourly Total Volume of Arriving Tests")
             fig_arr.update_traces(textposition="top center")
             fig_arr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_arr, use_container_width=True)
@@ -306,7 +304,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
             q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', color_discrete_sequence=px.colors.qualitative.Alphabet, title="QC Timing Matrix (24h)")
+            fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', color_discrete_sequence=LAB_COLORS, title="QC Timing Matrix (24h)")
             st.plotly_chart(fig_qc, use_container_width=True)
             export_figs["QC Timing Matrix"] = fig_qc
             
@@ -316,11 +314,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             
             c1, c2 = st.columns(2)
             with c1: 
-                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=px.colors.qualitative.Alphabet, title="Chemistry Stability")
+                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="Chemistry Stability")
                 st.plotly_chart(fig_chem, use_container_width=True)
                 export_figs["Chemistry QC Stability"] = fig_chem
             with c2: 
-                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=px.colors.qualitative.Alphabet, title="IA Stability")
+                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="IA Stability")
                 st.plotly_chart(fig_ia, use_container_width=True)
                 export_figs["Immunoassay QC Stability"] = fig_ia
             
@@ -361,11 +359,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         
         if not err_df.empty:
             type_counts = err_df['Alarm_Type'].value_counts().reset_index(name='Count')
-            fig_type = px.pie(type_counts, values='Count', names='Alarm_Type', hole=0.4, title="Overall Lab Error Profile", color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig_type = px.pie(type_counts, values='Count', names='Alarm_Type', hole=0.4, title="Overall Lab Error Profile", color_discrete_sequence=LAB_COLORS)
             st.plotly_chart(fig_type, use_container_width=True)
             export_figs["Error Profile"] = fig_type
 
-            err_bar = px.bar(err_df.groupby(['Module', 'Alarm_Code']).size().reset_index(name='C').sort_values('C', ascending=False).head(25), x='Alarm_Code', y='C', text='C', color='Module', color_discrete_sequence=px.colors.qualitative.Safe, title="Top 25 System Alarms Triggered")
+            err_bar = px.bar(err_df.groupby(['Module', 'Alarm_Code']).size().reset_index(name='C').sort_values('C', ascending=False).head(25), x='Alarm_Code', y='C', text='C', color='Module', color_discrete_sequence=LAB_COLORS, title="Top 25 System Alarms Triggered")
             err_bar.update_traces(textposition='auto')
             st.plotly_chart(err_bar, use_container_width=True)
             export_figs["System Alarms"] = err_bar
@@ -394,7 +392,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         load = df['AU_SubUnit'].value_counts().reset_index()
         load.columns = ['Unit', 'Count']
         if not load.empty:
-            fig_load = px.bar(load, x='Unit', y='Count', text='Count', color='Unit', color_discrete_sequence=px.colors.qualitative.Bold, title="Mechanical Load per Sub-Unit")
+            fig_load = px.bar(load, x='Unit', y='Count', text='Count', color='Unit', color_discrete_sequence=LAB_COLORS, title="Mechanical Load per Sub-Unit")
             fig_load.update_traces(textposition='auto')
             st.plotly_chart(fig_load, use_container_width=True)
             export_figs["Sub-Module Load"] = fig_load
