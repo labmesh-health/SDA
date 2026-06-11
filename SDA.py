@@ -174,10 +174,23 @@ def render_insight(title, obs, impact, pre, status="info"):
 def create_ppt(figs_dict):
     prs = Presentation()
     for title, fig in figs_dict.items():
+        
+        # --- THE FIX: Force a solid white background and standard theme for the export ---
+        fig.update_layout(
+            template="plotly_white",
+            paper_bgcolor="rgba(255, 255, 255, 1)", 
+            plot_bgcolor="rgba(255, 255, 255, 1)",
+            font=dict(color="black")
+        )
+        
         slide = prs.slides.add_slide(prs.slide_layouts[5])
         slide.shapes.title.text = title
+        
+        # Convert Plotly figure to image bytes
         img_bytes = fig.to_image(format="png", engine="kaleido", width=1000, height=550)
         img_stream = io.BytesIO(img_bytes)
+        
+        # Add to PPT (centered)
         slide.shapes.add_picture(img_stream, Inches(0.5), Inches(1.5), width=Inches(9))
         
     ppt_stream = io.BytesIO()
