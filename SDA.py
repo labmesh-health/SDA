@@ -12,15 +12,83 @@ from pptx.util import Inches
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
 
-# --- Clinical Knowledge Base (Roche Alarm Definitions) ---
+# --- Comprehensive Clinical Knowledge Base (Roche Pure & Pro) ---
 ALARM_MAP = {
-    ">v": {"name": "Above Technical Limit", "sev": "High", "msg": "Exceeds measurable range. Dilution required."},
-    "<v": {"name": "Below Technical Limit", "sev": "High", "msg": "Result below measurable range."},
-    "Short": {"name": "Short Sample", "sev": "Critical", "msg": "Insufficient volume. Check for micro-cups."},
-    "Clot": {"name": "Clot Detected", "sev": "Critical", "msg": "Fibrin detected. Re-spin sample."},
-    "Lin": {"name": "Linearity Error", "sev": "Medium", "msg": "Non-linear reaction. Review calibration."},
-    "Reag": {"name": "Reagent Issue", "sev": "Medium", "msg": "Check reagent pack integrity."},
-    "S.Idx": {"name": "Serum Index Warning", "sev": "Low", "msg": "HIL interference detected."},
+    ">Abs": {"name": "ABS over", "sev": "High", "msg": "Detected foam or air aspiration, or absorbance value exceeded 3.3. Check for sample integrity.", "type": "Analytical", "action": "Check sample for bubbles/foam. Review reaction curve."},
+    "ADC.E": {"name": "ADC abnormal", "sev": "Critical", "msg": "The ADC value of the primary or secondary wavelength is zero, or ISE cannot read ADC data.", "type": "Hardware", "action": "Hardware check required. Contact service if persistent."},
+    ">Cuvet": {"name": "ABS Cell blank abnormal", "sev": "Medium", "msg": "Cell blank value used for measurement deviates by more than 0.1Abs.", "type": "Analytical", "action": "Perform cell wash or replace cuvette."},
+    ">Reac0": {"name": "Reaction limit over", "sev": "High", "msg": "Endpoint assay measuring point out of defined reaction limit, or all rate assay points exceed limit.", "type": "Analytical", "action": "Review sample dilution or potential interference."},
+    ">Reac1": {"name": "Reaction limit over (2nd..)", "sev": "High", "msg": "The second and subsequent points exceed the reaction limit.", "type": "Analytical", "action": "Review reaction curve."},
+    ">Reac2": {"name": "Reaction limit over (3rd..)", "sev": "High", "msg": "The third and subsequent points exceed the reaction limit.", "type": "Analytical", "action": "Review reaction curve."},
+    ">Lin": {"name": "Linearity abnormal 1/2", "sev": "High", "msg": "In rate assay, the reaction linearity exceeds the specified limit value.", "type": "Analytical", "action": "Review sample dilution requirement."},
+    ">Kin": {"name": "Kinetic unstable", "sev": "Medium", "msg": "Detected by Kinetic unstable check.", "type": "Analytical", "action": "Review reaction kinetics."},
+    ">Kin1": {"name": "Kinetic unstable 1", "sev": "Medium", "msg": "Detected by Kinetic unstable check.", "type": "Analytical", "action": "Review reaction kinetics."},
+    ">Kin2": {"name": "Kinetic unstable 2", "sev": "Medium", "msg": "Detected by Kinetic unstable check.", "type": "Analytical", "action": "Review reaction kinetics."},
+    ">Kin3": {"name": "Kinetic unstable 3", "sev": "Medium", "msg": "Detected by Kinetic unstable check.", "type": "Analytical", "action": "Review reaction kinetics."},
+    "Samp.?": {"name": "ABS maximum over (non-linear curve)", "sev": "High", "msg": "Sample absorbance is outside the theoretical maximum/minimum of the calibration curve.", "type": "Analytical", "action": "Dilute and rerun."},
+    "Rough": {"name": "Kinetic Roughness Check", "sev": "Medium", "msg": "Detected by Kinetic Roughness Check.", "type": "Analytical", "action": "Review assay parameters."},
+    "Hook": {"name": "High Dose Hook Effect Check", "sev": "High", "msg": "Antigen excess detected.", "type": "Analytical", "action": "Dilute sample and rerun."},
+    "Samp.S": {"name": "Sample short", "sev": "Critical", "msg": "Liquid level not detected before aspiration. Check sample volume.", "type": "Pre-Analytical", "action": "Add more sample or check for micro-cups."},
+    "Samp.C": {"name": "Sample clot", "sev": "Critical", "msg": "Specified volume not aspirated due to clogging or short sample.", "type": "Pre-Analytical", "action": "Re-spin sample to remove fibrin/clots."},
+    "Samp.B": {"name": "Sample air bubble", "sev": "High", "msg": "Air bubble detected during aspiration.", "type": "Pre-Analytical", "action": "Remove bubbles from sample surface."},
+    "Samp.O": {"name": "Sample carry over", "sev": "Low", "msg": "Sample carry over wash required.", "type": "Hardware", "action": "System will automatically wash. Monitor for patterns."},
+    "Samp.V": {"name": "Sample height abnormal", "sev": "High", "msg": "Liquid level detected over 57mm from bottom. Tube may be overfilled.", "type": "Pre-Analytical", "action": "Check primary tube volume/height."},
+    "SASP.A": {"name": "Sample probe pressure abnormal", "sev": "Critical", "msg": "Pressure abnormality detected in sample probe flow path.", "type": "Hardware", "action": "Check probe for clogs/bends. Perform probe wash."},
+    "S2PL.E": {"name": "Sample probe (S2) pressure abnormal", "sev": "Critical", "msg": "Pressure abnormality detected after S2 probe pipetting.", "type": "Hardware", "action": "Check S2 probe for clogs/bends."},
+    "SLLD.E": {"name": "Sample LLD abnormal", "sev": "High", "msg": "LLD failed to start or complete. Check for dirt on tip.", "type": "Hardware", "action": "Clean probe tip. Check for deep clots."},
+    "SLLD.N": {"name": "Sample LLD noise", "sev": "Medium", "msg": "Liquid surface detection failed due to bubbles or static electricity.", "type": "Pre-Analytical", "action": "Remove bubbles. Check tube material."},
+    "Det.S": {"name": "Carry over detergent short", "sev": "High", "msg": "Shortage of detergent for reagent carryover evasion.", "type": "Hardware", "action": "Replenish system detergent."},
+    "CarOvr": {"name": "Potential carry over", "sev": "Medium", "msg": "Signal level is abnormally low, suggesting potential carryover.", "type": "Analytical", "action": "Review preceding samples on track."},
+    "Reag.S": {"name": "Reagent short", "sev": "Critical", "msg": "Liquid level not detected in reagent container. Foam/air detected.", "type": "Reagent", "action": "Replace reagent pack."},
+    "ReagEx": {"name": "Reagent Expired Date", "sev": "High", "msg": "Expired reagent used; result not guaranteed.", "type": "Reagent", "action": "Replace with unexpired reagent."},
+    "Reag.H": {"name": "Reagent hovering", "sev": "Medium", "msg": "Probe hovers over reaction disk.", "type": "Hardware", "action": "Mechanical check needed."},
+    "Reag.F": {"name": "Reagent film detection", "sev": "Medium", "msg": "Probe detects film on reagent/dilution/pretreatment/ProCell/CleanCell.", "type": "Reagent", "action": "Check reagent surface. Discard if contaminated."},
+    "Reag.T": {"name": "Reagent disk temperature", "sev": "Critical", "msg": "Reagent disk temperature out of range.", "type": "Hardware", "action": "Check lab ambient temp. Call service."},
+    "Inc.T": {"name": "Incubator temperature", "sev": "Critical", "msg": "Incubator temperature out of range.", "type": "Hardware", "action": "Call service immediately."},
+    "SysR.T": {"name": "System reagent temperature", "sev": "High", "msg": "ProCell/CleanCell temperature out of range.", "type": "Hardware", "action": "Check system fluid temperatures."},
+    "Cell.T": {"name": "Cell temperature", "sev": "High", "msg": "Measuring cell temperature out of range.", "type": "Hardware", "action": "Call service."},
+    "WBSS.T": {"name": "Washing buffer SS temperature", "sev": "Medium", "msg": "PreClean separation station temperature out of range.", "type": "Hardware", "action": "Monitor system."},
+    "WB.T": {"name": "Washing buffer temperature", "sev": "Medium", "msg": "PreClean temperature out of range.", "type": "Hardware", "action": "Monitor system."},
+    "ISE.N": {"name": "ISE noise error", "sev": "High", "msg": "Fluctuation in electromotive force exceeds limits (Na: 0.7mV, K: 1.0mV, Cl: 0.8mV).", "type": "Analytical", "action": "Perform ISE prime. Check electrodes."},
+    "ISE.E": {"name": "ISE voltage level error", "sev": "High", "msg": "Mean EMF of internal reference out of range.", "type": "Analytical", "action": "Check internal standard fluid."},
+    "ElecEx": {"name": "Expired ISE electrode", "sev": "High", "msg": "Expired electrode used; result not guaranteed.", "type": "Hardware", "action": "Replace ISE electrodes."},
+    "OBS.EL": {"name": "On board stability/count of ISE exceeded", "sev": "Medium", "msg": "On board stability time or count exceeded for ISE electrodes.", "type": "Hardware", "action": "Replace ISE electrodes."},
+    "OBS.RR": {"name": "On board stability limit over on reagents", "sev": "Medium", "msg": "OBS limit exceeded on Reagent Rotor and ISE reagents.", "type": "Reagent", "action": "Replace aged reagents."},
+    ">Test": {"name": "Technical Limit over (upper)", "sev": "High", "msg": "Concentration exceeds technical limit/measuring range.", "type": "Analytical", "action": "Dilute sample and rerun."},
+    "<Test": {"name": "Technical Limit over (lower)", "sev": "High", "msg": "Concentration is below technical limit/measuring range.", "type": "Analytical", "action": "Report as < Technical Limit."},
+    ">Rept": {"name": "Repeat limit over (upper)", "sev": "Medium", "msg": "Result exceeds upper limit of specified repeat range.", "type": "Analytical", "action": "Review result. May auto-repeat."},
+    "<Rept": {"name": "Repeat limit over (lower)", "sev": "Medium", "msg": "Result falls below lower limit of specified repeat range.", "type": "Analytical", "action": "Review result."},
+    "H": {"name": "Above expected value", "sev": "Low", "msg": "Result is higher than reference range.", "type": "Clinical", "action": "Clinical review."},
+    "L": {"name": "Below expected value", "sev": "Low", "msg": "Result is lower than reference range.", "type": "Clinical", "action": "Clinical review."},
+    "Calc.?": {"name": "Calculation not possible", "sev": "High", "msg": "Denominator is zero, overflow in exponential calc, or result left blank.", "type": "Software", "action": "Review raw data points."},
+    "ClcT.E": {"name": "Calculation test error", "sev": "High", "msg": "Data alarm occurred for a test needed in a calculated result.", "type": "Software", "action": "Review base test results."},
+    "Over.E": {"name": "Overflow", "sev": "High", "msg": "Output figure exceeds defined digits.", "type": "Software", "action": "Check LIS transmission settings."},
+    "eflowE": {"name": "e flow error", "sev": "Medium", "msg": "Sub result measured in e flow has data alarm.", "type": "Software", "action": "Review sub-results."},
+    "eflowW": {"name": "e flow warning", "sev": "Low", "msg": "Higher Uncertainty flag attached to a Sub Result.", "type": "Software", "action": "Review sub-results."},
+    "HU": {"name": "Higher uncertainty", "sev": "Low", "msg": "Result is between Technical Limit Low and Higher Uncertainty Limit.", "type": "Analytical", "action": "Result is valid but close to limits."},
+    "<SigL": {"name": "Low level signal", "sev": "High", "msg": "Effective signal lower than specified limit.", "type": "Analytical", "action": "Check reagent/calibration."},
+    ">Curr": {"name": "Current range over", "sev": "High", "msg": "Measuring cell current out of range in determination cycle.", "type": "Hardware", "action": "Hardware check."},
+    "QCErr": {"name": "QC error", "sev": "High", "msg": "Error related to QC measurement.", "type": "QC", "action": "Review QC rules and calibration."},
+    ">I.L": {"name": "Lipemia index interference", "sev": "Medium", "msg": "Lipemia value exceeds specified limit.", "type": "Pre-Analytical", "action": "Ultracentrifuge sample and rerun."},
+    ">I.H": {"name": "Hemolysis index interference", "sev": "Medium", "msg": "Hemolysis value exceeds specified limit.", "type": "Pre-Analytical", "action": "Request new sample redraw."},
+    ">I.I": {"name": "Icteric index interference", "sev": "Medium", "msg": "Icteric value exceeds specified limit.", "type": "Pre-Analytical", "action": "Note clinical condition."},
+    ">I.LH": {"name": "Lipemia/Hemolysis interference", "sev": "High", "msg": "Both lipemia and hemolysis exceed limits.", "type": "Pre-Analytical", "action": "Request redraw. Difficult to salvage."},
+    ">I.LI": {"name": "Lipemia/Icteric interference", "sev": "High", "msg": "Both lipemia and icteric exceed limits.", "type": "Pre-Analytical", "action": "Ultracentrifuge and note icterus."},
+    ">I.HI": {"name": "Hemolysis/Icteric interference", "sev": "High", "msg": "Both hemolysis and icteric exceed limits.", "type": "Pre-Analytical", "action": "Request redraw."},
+    ">I.LHI": {"name": "Lipemia/Hemolysis/Icteric interference", "sev": "Critical", "msg": "All HIL values exceed limits.", "type": "Pre-Analytical", "action": "Sample heavily compromised. Redraw."},
+    "na.LHI": {"name": "Sample Index not performed", "sev": "Low", "msg": "Sample index measurement could not be performed.", "type": "Analytical", "action": "Ensure HIL mapping is active."},
+    "Cal.E": {"name": "CALIB error", "sev": "High", "msg": "Calibrator concentration differs from limits or previous calibration failed.", "type": "Calibration", "action": "Review calibrator prep. Recalibrate."},
+    "Call": {"name": "Calibration result invalid", "sev": "High", "msg": "Result generated with invalid transferred calibration.", "type": "Calibration", "action": "Recalibrate immediately."},
+    "Dup.E": {"name": "DUPLICATE error", "sev": "High", "msg": "Difference between 1st and 2nd cal measurement is out of range.", "type": "Calibration", "action": "Check calibrator homogeneity."},
+    "Std.E": {"name": "STANDARD error", "sev": "Critical", "msg": "Calibration failed due to severe hardware/fluidic alarm (clot, bubble, etc.).", "type": "Calibration", "action": "Resolve underlying hardware error. Recalibrate."},
+    "Sens.E": {"name": "SENSITIVITY error", "sev": "High", "msg": "Sensitivity check failed for linear/nonlinear calibration.", "type": "Calibration", "action": "Check reagent lot and calibrator concentrations."},
+    "SD.E": {"name": "SD limit error", "sev": "High", "msg": "SD value larger than specified limit during calibration.", "type": "Calibration", "action": "Check calibrator stability/probe precision."},
+    "Slop.E": {"name": "Slope abnormal", "sev": "High", "msg": "ISE slope value out of range.", "type": "Calibration", "action": "Perform ISE maintenance."},
+    "IStd.E": {"name": "IS concentration abnormal", "sev": "High", "msg": "Internal Standard concentration out of range.", "type": "Calibration", "action": "Replace Internal Standard fluid."},
+    "Rsp1.E": {"name": "Response(ISE) abnormal 1", "sev": "High", "msg": "A Factor outside limit.", "type": "Calibration", "action": "Perform ISE prime."},
+    "Rsp2.E": {"name": "Response(ISE) abnormal 2", "sev": "High", "msg": "A Factor outside limit.", "type": "Calibration", "action": "Clean ISE flow path."},
+    "S1A.E": {"name": "S1ABS abnormal", "sev": "High", "msg": "Expected absorbance outside S1 Abs Limit during calibration.", "type": "Calibration", "action": "Check blank/Std 1 integrity."},
+    "Diff.E": {"name": "Minimum acceptable difference", "sev": "High", "msg": "Signal difference between calibrator levels is below permissible value.", "type": "Calibration", "action": "Check reagent viability."}
 }
 
 @st.cache_data
@@ -69,13 +137,20 @@ def process_data(file_bytes):
 
         def parse_au(au_str):
             if not au_str or pd.isna(au_str): return "N/A", "Unknown", "Unknown"
-            parts = str(au_str).split('-')
-            pos, mtype = parts[0], (parts[1] if len(parts) > 1 else "N/A")
-            sub = parts[2] if len(parts) > 2 else "0"
-            return pos, mtype, f"{mtype}-{sub}"
+            au_str = str(au_str).strip()
+            # Handle Pure vs Pro format
+            if '-' in au_str:
+                parts = au_str.split('-')
+                pos, mtype = parts[0], (parts[1] if len(parts) > 1 else "N/A")
+                sub = parts[2] if len(parts) > 2 else "0"
+                return pos, mtype, f"{mtype}-{sub}"
+            else:
+                return "1", au_str, f"{au_str}-0"
 
         df[['AU_Pos', 'AU_Class', 'AU_SubUnit']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
-        df['Alarm_Meaning'] = df['Data_Alarm'].str.strip().apply(lambda x: ALARM_MAP.get(x, {"name": ""})['name'] if x else "")
+        df['Alarm_Code'] = df['Data_Alarm'].str.strip()
+        df['Alarm_Type'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"type": "Unknown"})['type'] if x else "None")
+        df['Alarm_Meaning'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"name": ""})['name'] if x else "")
 
         mappings = {
             "Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
@@ -87,7 +162,8 @@ def process_data(file_bytes):
             
         return df
     except Exception as e:
-        st.error(f"Processing Error: {e}"); return None
+        st.error(f"Processing Error: {e}")
+        return None
 
 def render_insight(title, obs, impact, pre, status="info"):
     colors = {"info": "#0b41cd", "warning": "#ff9800", "critical": "#f44336", "success": "#4caf50"}
@@ -99,14 +175,10 @@ def render_insight(title, obs, impact, pre, status="info"):
 def create_ppt(figs_dict):
     prs = Presentation()
     for title, fig in figs_dict.items():
-        slide = prs.slides.add_slide(prs.slide_layouts[5]) # Title only layout
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
         slide.shapes.title.text = title
-        
-        # Convert Plotly figure to image bytes
         img_bytes = fig.to_image(format="png", engine="kaleido", width=1000, height=550)
         img_stream = io.BytesIO(img_bytes)
-        
-        # Add to PPT (centered)
         slide.shapes.add_picture(img_stream, Inches(0.5), Inches(1.5), width=Inches(9))
         
     ppt_stream = io.BytesIO()
@@ -127,14 +199,12 @@ with st.sidebar:
             sel_range = st.date_input("Date Range", [min_d, max_d], min_value=min_d, max_value=max_d)
             sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
     
-    # Engine Details & Copyright Information
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v7.0\n- **Compatibility:** cobas pro\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v8.1\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
-# Dictionary to hold figures for PPT export
 export_figs = {}
 
 # --- Main App ---
@@ -143,7 +213,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     mask = (raw_df['Arrived_Date_Time'].dt.date >= start_d) & (raw_df['Arrived_Date_Time'].dt.date <= end_d) & (raw_df['Discrimination'].isin(sel_cats))
     df = raw_df.loc[mask]
 
-    t = st.tabs(["📄 Raw Data", "📊 Throughput", "🧪 Quality Control", "🔄 Reruns", "⚠️ Alarms", "⚙️ Hardware Load"])
+    t = st.tabs(["📄 Raw Data", "📊 Throughput", "🧪 Quality Control", "🔄 Reruns", "⚠️ Alarms & Risk", "⚙️ Hardware Load"])
     
     with t[0]:
         st.dataframe(df, use_container_width=True)
@@ -163,26 +233,37 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             st.plotly_chart(fig_line, use_container_width=True)
             export_figs["Instrument Sampling Rate"] = fig_line
             
-            caps = {"c 503": (1000, 800), "ISE": (900, 850), "e 801": (300, 275)}
+            # Auto-detect Pro vs Pure to apply correct limits dynamically
+            is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_Class'])
+            
+            if is_pure:
+                # Cobas Pure Limits (c 303 Photometric = 450 max, ISE = 450 max)
+                caps = {"c 303": (450, 360), "ISE": (450, 360), "e 402": (120, 100), "EFLW": (0,0)}
+            else:
+                # Cobas Pro Limits
+                caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275), "EFLW": (0,0)}
+            
             peak_stats = []
             for m_type, (m_max, m_prac) in caps.items():
-                peak_val = h_util[h_util['AU_Class'].str.contains(m_type, na=False)]['Tests'].max() if any(m_type in str(x) for x in h_util['AU_Class']) else 0
-                peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Prac': m_prac, 'Theo': m_max})
+                if any(m_type in str(x) for x in h_util['AU_Class']) and m_max > 0:
+                    peak_val = h_util[h_util['AU_Class'].str.contains(m_type, na=False)]['Tests'].max()
+                    peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Prac': m_prac, 'Theo': m_max})
             
-            fig_p = go.Figure()
-            fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], text=[int(d['Peak']) for d in peak_stats], textposition='auto', name="Actual Peak", marker_color='#0b41cd'))
-            for i, d in enumerate(peak_stats):
-                fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
-                fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
-            fig_p.update_layout(title="Peak Stress vs Module Capacity (Orange = Practical Limit)")
-            st.plotly_chart(fig_p, use_container_width=True)
-            export_figs["Peak Stress vs Capacity"] = fig_p
+            if peak_stats:
+                fig_p = go.Figure()
+                fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], text=[int(d['Peak']) for d in peak_stats], textposition='auto', name="Actual Peak", marker_color='#0b41cd'))
+                for i, d in enumerate(peak_stats):
+                    fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
+                    fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
+                fig_p.update_layout(title="Peak Stress vs Module Capacity (Orange = Practical Limit)")
+                st.plotly_chart(fig_p, use_container_width=True)
+                export_figs["Peak Stress vs Capacity"] = fig_p
 
-            stress_mod = [d['Module'] for d in peak_stats if d['Peak'] > d['Prac']]
-            if stress_mod:
-                render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
-            else:
-                render_insight("Throughput Efficiency", "All modules are operating within practical capacity.", "Workflow and TAT should remain stable without bottlenecks.", "Optimal loading rate detected.", "success")
+                stress_mod = [d['Module'] for d in peak_stats if d['Peak'] > d['Prac']]
+                if stress_mod:
+                    render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
+                else:
+                    render_insight("Throughput Efficiency", "All modules are operating within practical capacity.", "Workflow and TAT should remain stable without bottlenecks.", "Optimal loading rate detected.", "success")
         else: st.info("No sampling data available for throughput analysis.")
         
         st.markdown("---")
@@ -198,8 +279,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             fig_arr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_arr, use_container_width=True)
             export_figs["Hourly Arrival Pattern"] = fig_arr
-            
-            render_insight("Arrival vs Throughput Gap", f"Peak arrival hour received {arr_counts['Total Tests'].max()} total tests.", "A massive spike in arrivals compared to sampling capacity creates a backlog in the pre-analytical buffer.", "Compare this arrival peak against your instrument sampling peak above to measure backlogs.", "info")
         else: st.info("No arrival data available for analysis.")
 
     with t[2]:
@@ -207,7 +286,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
         if not q_df.empty:
             q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            
             fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', title="QC Timing Matrix (24h)")
             st.plotly_chart(fig_qc, use_container_width=True)
             export_figs["QC Timing Matrix"] = fig_qc
@@ -218,11 +296,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             
             c1, c2 = st.columns(2)
             with c1: 
-                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("c 503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="Chemistry Stability")
+                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="Chemistry Stability")
                 st.plotly_chart(fig_chem, use_container_width=True)
                 export_figs["Chemistry QC Stability"] = fig_chem
             with c2: 
-                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("e 801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="IA Stability")
+                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', title="IA Stability")
                 st.plotly_chart(fig_ia, use_container_width=True)
                 export_figs["Immunoassay QC Stability"] = fig_ia
             
@@ -258,15 +336,36 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         else: st.info("No run data found.")
 
     with t[4]:
-        st.subheader("Analytical Risk Alarms")
-        err_df = df[df['Data_Alarm'].str.strip() != ""].copy()
+        st.subheader("Analytical Risk & Error Intelligence")
+        err_df = df[df['Alarm_Code'] != ""].copy()
+        
         if not err_df.empty:
-            err_bar = px.bar(err_df.groupby(['Module', 'Data_Alarm']).size().reset_index(name='C'), x='Data_Alarm', y='C', text='C', color='Module', title="System Alarm Frequencies")
+            type_counts = err_df['Alarm_Type'].value_counts().reset_index(name='Count')
+            fig_type = px.pie(type_counts, values='Count', names='Alarm_Type', hole=0.4, title="Overall Lab Error Profile", color_discrete_sequence=px.colors.qualitative.Pastel)
+            st.plotly_chart(fig_type, use_container_width=True)
+            export_figs["Error Profile"] = fig_type
+
+            err_bar = px.bar(err_df.groupby(['Module', 'Alarm_Code']).size().reset_index(name='C').sort_values('C', ascending=False).head(25), x='Alarm_Code', y='C', text='C', color='Module', title="Top 25 System Alarms Triggered")
             err_bar.update_traces(textposition='auto')
             st.plotly_chart(err_bar, use_container_width=True)
             export_figs["System Alarms"] = err_bar
             
-            render_insight("Risk Monitoring", f"{len(err_df)} flags detected.", "Flags indicate compromised results.", "Check 'Short' flags immediately.", "critical")
+            pre_ana = err_df[err_df['Alarm_Type'] == 'Pre-Analytical']
+            if not pre_ana.empty:
+                top_pre = pre_ana['Alarm_Code'].value_counts().idxmax()
+                render_insight("Pre-Analytical Bleed", f"Detected {len(pre_ana)} pre-analytical errors (Top: {top_pre}).", "Issues like Clots, Shorts, and HIL interferences lead to immediate probe damage or unreportable results.", "Audit centrifuge protocols and phlebotomy draw volumes.", "critical")
+            
+            reag_err = err_df[err_df['Alarm_Type'] == 'Reagent']
+            if not reag_err.empty:
+                render_insight("Reagent Management", f"Detected {len(reag_err)} Reagent/OBS flags.", "Using expired reagents or running low during peak hours halts the track.", "Review inventory and On-Board Stability (OBS) limits.", "warning")
+
+            cal_err = err_df[err_df['Alarm_Type'] == 'Calibration']
+            if not cal_err.empty:
+                render_insight("Calibration Instability", f"Detected {len(cal_err)} Calibration failures.", "Failed calibrations prevent patient sample processing.", "Check calibrator lot expiry and reconstitution.", "critical")
+
+            if pre_ana.empty and reag_err.empty and cal_err.empty:
+                render_insight("System Health", "Minor analytical warnings detected.", "No critical operational halt alarms.", "Review reaction curves if >Reac alarms persist.", "info")
+
         else:
             render_insight("Alarm Status", "Zero flags detected.", "Results are analytically clean.", "Continue standard monitoring.", "success")
 
@@ -282,19 +381,18 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             
             if len(load) > 1:
                 imb = load['Count'].max() / load['Count'].min()
-                if imb > 1.2:
-                    render_insight("Mechanical Wear Skew", f"Imbalance of {imb:.1f}x.", "Uneven wear reduces module lifespan.", "Re-map high-volume tests.", "warning")
+                if imb > 1.25:
+                    render_insight("Mechanical Wear Skew", f"Imbalance of {imb:.1f}x.", "Uneven wear reduces module lifespan.", "Re-map high-volume tests to balance the workload.", "warning")
                 else:
                     render_insight("Load Balance", "Workload is balanced.", "Even mechanical wear detected.", "Mapping is optimal.", "success")
         else: st.info("No module load data found.")
 
-    # --- PPT Export Injection ---
     if export_figs:
         with st.sidebar:
             st.markdown("---")
             st.subheader("📤 Export Dashboard")
             if st.button("Prepare PPT Report"):
-                with st.spinner("Generating presentation slides... (this takes a few seconds)"):
+                with st.spinner("Generating presentation slides..."):
                     try:
                         ppt_data = create_ppt(export_figs)
                         st.session_state['ppt_bytes'] = ppt_data
