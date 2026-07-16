@@ -234,7 +234,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.3\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.4\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -259,7 +259,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
 
     with t[1]:
         st.subheader("Laboratory Throughput & Peak Stress")
-        # Filter out 'Unknown' because they are software calculations, not mechanical loads
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
         u_df = u_df[u_df['AU_Class'] != "Unknown"]
         
@@ -387,6 +386,9 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         
         err_df = df[df['Alarm_Type'] != "None"].copy()
         
+        # --- THE FIX: Replace invisible blank modules with a clear "System (Calculated)" label ---
+        err_df['Module'] = err_df['Module'].apply(lambda x: "System (Calculated)" if pd.isna(x) or str(x).strip() == "" else str(x).strip())
+        
         if not err_df.empty:
             type_counts = err_df['Alarm_Type'].value_counts().reset_index(name='Count')
             fig_type = px.pie(type_counts, values='Count', names='Alarm_Type', hole=0.4, title="Overall Lab Error Profile", color_discrete_sequence=LAB_COLORS)
@@ -420,7 +422,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     with t[5]:
         st.subheader("Sub-Module Load Balancing")
         
-        # Filter out 'Unknown' hardware units since they represent calculated math (no mechanical load)
         load_df = df.dropna(subset=['AU_Class', 'AU_SubUnit']).copy()
         load_df = load_df[load_df['AU_SubUnit'] != "Unknown"]
         
