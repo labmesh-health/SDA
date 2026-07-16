@@ -72,6 +72,8 @@ ALARM_MAP = {
     "<SigL": {"name": "Low level signal", "sev": "High", "msg": "Effective signal lower than specified limit.", "type": "Analytical", "action": "Check reagent/calibration."},
     ">Curr": {"name": "Current range over", "sev": "High", "msg": "Measuring cell current out of range in determination cycle.", "type": "Hardware", "action": "Hardware check."},
     "QCErr": {"name": "QC error", "sev": "High", "msg": "Error related to QC measurement.", "type": "QC", "action": "Review QC rules and calibration."},
+    "QCLow": {"name": "QC out of range (Low)", "sev": "High", "msg": "QC result violates low limit rules.", "type": "QC", "action": "Review QC rules and calibration."},
+    "QCHigh": {"name": "QC out of range (High)", "sev": "High", "msg": "QC result violates high limit rules.", "type": "QC", "action": "Review QC rules and calibration."},
     ">I.L": {"name": "Lipemia index interference", "sev": "Medium", "msg": "Lipemia value exceeds specified limit.", "type": "Pre-Analytical", "action": "Ultracentrifuge sample and rerun."},
     ">I.H": {"name": "Hemolysis index interference", "sev": "Medium", "msg": "Hemolysis value exceeds specified limit.", "type": "Pre-Analytical", "action": "Request new sample redraw."},
     ">I.I": {"name": "Icteric index interference", "sev": "Medium", "msg": "Icteric value exceeds specified limit.", "type": "Pre-Analytical", "action": "Note clinical condition."},
@@ -177,13 +179,9 @@ def render_insight(title, obs, impact, pre, status="info"):
 def create_ppt(figs_dict):
     prs = Presentation()
     for title, fig in figs_dict.items():
-        
         fig.layout.paper_bgcolor = '#ffffff'
         fig.layout.plot_bgcolor = '#ffffff'
-        fig.update_layout(
-            template="plotly_white",
-            font=dict(color="#000000")
-        )
+        fig.update_layout(template="plotly_white", font=dict(color="#000000"))
         
         img_bytes = fig.to_image(format="png", engine="kaleido", width=1000, height=550, scale=2)
         img_stream = io.BytesIO(img_bytes)
@@ -216,7 +214,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v8.4\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.0\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -341,6 +339,8 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             export_figs["First-Pass Yield Ratio"] = fig_pie
             
             rerun_only = df[df['Run'] == 'Rerun']
+            rerun_rate = (len(rerun_only) / len(df)) * 100 if len(df) > 0 else 0
+            
             if not rerun_only.empty:
                 rerun_df = rerun_only.groupby('Parameter').size().reset_index(name='Count').sort_values('Count', ascending=False)
                 fig_r_bar = px.bar(rerun_df, x='Parameter', y='Count', text='Count', title="Top Rerun Assays", color_discrete_sequence=['#f44336'])
@@ -348,7 +348,14 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                 st.plotly_chart(fig_r_bar, use_container_width=True)
                 export_figs["Top Rerun Assays"] = fig_r_bar
                 
-                render_insight("Yield Efficiency", f"Rerun rate is {(len(rerun_only)/len(df)*100):.1f}%.", "Reruns double reagent costs and delay TAT.", f"Investigate '{rerun_df.iloc[0]['Parameter']}' for frequent errors.", "critical")
+                # Dynamic Tiered KPI Insight Logic
+                top_assay = rerun_df.iloc[0]['Parameter']
+                if rerun_rate < 2.0:
+                    render_insight("System Yield", f"Excellent First-Pass Yield. Rerun rate is {rerun_rate:.1f}%.", "Reagent waste and TAT delays are minimal.", "System is performing optimally.", "success")
+                elif rerun_rate <= 5.0:
+                    render_insight("Yield Efficiency Warning", f"Elevated Rerun Rate at {rerun_rate:.1f}%.", "Reruns are increasing reagent costs and TAT.", f"Investigate '{top_assay}' for frequent errors.", "warning")
+                else:
+                    render_insight("Yield Efficiency Critical", f"Severe Yield Bleed. Rerun rate is {rerun_rate:.1f}%.", "Reruns are doubling reagent costs and significantly delaying TAT.", f"Immediate audit of '{top_assay}' required.", "critical")
             else:
                 render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "System is performing optimally.", "success")
         else: st.info("No run data found.")
@@ -389,42 +396,66 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
 
     with t[5]:
         st.subheader("Sub-Module Load Balancing")
-        load = df['AU_SubUnit'].value_counts().reset_index()
-        load.columns = ['Unit', 'Count']
-        if not load.empty:
-            fig_load = px.bar(load, x='Unit', y='Count', text='Count', color='Unit', color_discrete_sequence=LAB_COLORS, title="Mechanical Load per Sub-Unit")
+        
+        # We only want to compare subunits within the same base class
+        # (e.g., e 801-1 vs e 801-2, not e 801 vs c 503)
+        load_df = df.dropna(subset=['AU_Class', 'AU_SubUnit']).copy()
+        
+        if not load_df.empty:
+            load_summary = load_df['AU_SubUnit'].value_counts().reset_index()
+            load_summary.columns = ['Unit', 'Count']
+            
+            fig_load = px.bar(load_summary, x='Unit', y='Count', text='Count', color='Unit', color_discrete_sequence=LAB_COLORS, title="Mechanical Load per Sub-Unit")
             fig_load.update_traces(textposition='auto')
             st.plotly_chart(fig_load, use_container_width=True)
             export_figs["Sub-Module Load"] = fig_load
             
-            if len(load) > 1:
-                imb = load['Count'].max() / load['Count'].min()
-                if imb > 1.25:
-                    render_insight("Mechanical Wear Skew", f"Imbalance of {imb:.1f}x.", "Uneven wear reduces module lifespan.", "Re-map high-volume tests to balance the workload.", "warning")
+            # --- Identical Parallel Module Insight Logic ---
+            imbalance_found = False
+            imbalance_msgs = []
+            
+            for au_class in load_df['AU_Class'].unique():
+                class_df = load_df[load_df['AU_Class'] == au_class]
+                sub_load = class_df['AU_SubUnit'].value_counts()
+                
+                # Only check for imbalance if there are multiple identical sub-modules (e.g. > 1 of e 801)
+                if len(sub_load) > 1:
+                    imb = sub_load.max() / sub_load.min()
+                    if imb > 1.25:
+                        imbalance_found = True
+                        imbalance_msgs.append(f"{au_class} ({imb:.1f}x)")
+                        
+            if imbalance_found:
+                render_insight("Mechanical Wear Skew", f"Imbalance detected within identical modules: **{', '.join(imbalance_msgs)}**.", "Uneven wear accelerates part degradation and reduces module lifespan on specific analytical units.", "Re-map high-volume tests across parallel modules to balance the workload.", "warning")
+            else:
+                parallel_exists = any(len(load_df[load_df['AU_Class'] == c]['AU_SubUnit'].unique()) > 1 for c in load_df['AU_Class'].unique())
+                if parallel_exists:
+                    render_insight("Load Balance", "Workload is properly distributed among identical parallel modules.", "Even mechanical wear detected. Maximizing instrument lifespan.", "Mapping is optimal.", "success")
                 else:
-                    render_insight("Load Balance", "Workload is balanced.", "Even mechanical wear detected.", "Mapping is optimal.", "success")
+                    render_insight("Load Balance", "Single sub-modules detected per class.", "Natural test mix displayed.", "No parallel balancing required.", "info")
         else: st.info("No module load data found.")
 
-    if export_figs:
-        with st.sidebar:
-            st.markdown("---")
-            st.subheader("📤 Export Dashboard")
-            if st.button("Prepare PPT Report"):
-                with st.spinner("Generating presentation slides..."):
-                    try:
-                        ppt_data = create_ppt(export_figs)
-                        st.session_state['ppt_bytes'] = ppt_data
-                        st.success("Ready!")
-                    except Exception as e:
-                        st.error(f"Error generating PPT. Please ensure 'kaleido' is installed. Error: {e}")
-            
-            if 'ppt_bytes' in st.session_state:
-                st.download_button(
-                    label="📥 Download PowerPoint File",
-                    data=st.session_state['ppt_bytes'],
-                    file_name=f"Dashboard_Report_{uploaded_file.name}.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    type="primary"
-                )
+    # --- PPT Export Section (Currently Disabled) ---
+    # if export_figs:
+    #     with st.sidebar:
+    #         st.markdown("---")
+    #         st.subheader("📤 Export Dashboard")
+    #         if st.button("Prepare PPT Report"):
+    #             with st.spinner("Generating presentation slides..."):
+    #                 try:
+    #                     ppt_data = create_ppt(export_figs)
+    #                     st.session_state['ppt_bytes'] = ppt_data
+    #                     st.success("Ready!")
+    #                 except Exception as e:
+    #                     st.error(f"Error generating PPT. Please ensure 'kaleido' is installed. Error: {e}")
+    #         
+    #         if 'ppt_bytes' in st.session_state:
+    #             st.download_button(
+    #                 label="📥 Download PowerPoint File",
+    #                 data=st.session_state['ppt_bytes'],
+    #                 file_name=f"Dashboard_Report_{uploaded_file.name}.pptx",
+    #                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    #                 type="primary"
+    #             )
 else:
     st.info("👈 Upload a CSV to begin.")
