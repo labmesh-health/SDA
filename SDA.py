@@ -8,6 +8,7 @@ import numpy as np
 from datetime import datetime
 from pptx import Presentation
 from pptx.util import Inches
+import re
 
 # --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
@@ -153,14 +154,16 @@ def process_data(file_bytes):
 
         df[['AU_Pos', 'AU_Class', 'AU_SubUnit']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
         
-        # --- Advanced Fuzzy Alarm Matcher ---
         def map_alarm_type(c):
             if pd.isna(c): return "None"
             c_str = str(c).strip()
-            if not c_str: return "None"
+            
+            # HARD FIX: Ignore standalone raw numbers and treat them as 'None' (No error)
+            if not c_str or c_str.lstrip('-').replace('.','',1).isdigit(): 
+                return "None"
+                
             if c_str in ALARM_MAP: return ALARM_MAP[c_str]["type"]
             
-            # Fuzzy Fallbacks for unlisted variations (e.g. QC.Low, Samp Error, etc.)
             c_up = c_str.upper()
             if "QC" in c_up: return "QC"
             if "SAMP" in c_up: return "Pre-Analytical"
@@ -169,7 +172,6 @@ def process_data(file_bytes):
             if "ISE" in c_up or "ABS" in c_up or "KIN" in c_up or "REAC" in c_up: return "Analytical"
             return "Unknown"
 
-        # Safely extract codes without triggering Pandas NaN traps
         df['Alarm_Code'] = df['Data_Alarm'].apply(lambda x: "" if pd.isna(x) else str(x).strip())
         df['Alarm_Type'] = df['Alarm_Code'].apply(map_alarm_type)
         df['Alarm_Meaning'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"name": x})['name'] if x else "")
@@ -232,7 +234,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.1\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.3\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -257,7 +259,10 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
 
     with t[1]:
         st.subheader("Laboratory Throughput & Peak Stress")
+        # Filter out 'Unknown' because they are software calculations, not mechanical loads
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
+        u_df = u_df[u_df['AU_Class'] != "Unknown"]
+        
         if not u_df.empty:
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
@@ -298,7 +303,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                     render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
                 else:
                     render_insight("Throughput Efficiency", "All modules are operating within practical capacity.", "Workflow and TAT should remain stable without bottlenecks.", "Optimal loading rate detected.", "success")
-        else: st.info("No sampling data available for throughput analysis.")
+        else: st.info("No mechanical sampling data available for throughput analysis.")
         
         st.markdown("---")
         st.subheader("Total Test Arrival Pattern (24h)")
@@ -380,7 +385,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     with t[4]:
         st.subheader("Analytical Risk & Error Intelligence")
         
-        # Strictly filter out 'None' so normal patient results don't show up in the Pie Chart
         err_df = df[df['Alarm_Type'] != "None"].copy()
         
         if not err_df.empty:
@@ -416,7 +420,10 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     with t[5]:
         st.subheader("Sub-Module Load Balancing")
         
+        # Filter out 'Unknown' hardware units since they represent calculated math (no mechanical load)
         load_df = df.dropna(subset=['AU_Class', 'AU_SubUnit']).copy()
+        load_df = load_df[load_df['AU_SubUnit'] != "Unknown"]
+        
         if not load_df.empty:
             load_summary = load_df['AU_SubUnit'].value_counts().reset_index()
             load_summary.columns = ['Unit', 'Count']
@@ -447,29 +454,9 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                     render_insight("Load Balance", "Workload is properly distributed among identical parallel modules.", "Even mechanical wear detected. Maximizing instrument lifespan.", "Mapping is optimal.", "success")
                 else:
                     render_insight("Load Balance", "Single sub-modules detected per class.", "Natural test mix displayed.", "No parallel balancing required.", "info")
-        else: st.info("No module load data found.")
+        else: st.info("No physical module load data found.")
 
     # --- PPT Export Section (Currently Disabled) ---
-    # if export_figs:
-    #     with st.sidebar:
-    #         st.markdown("---")
-    #         st.subheader("📤 Export Dashboard")
-    #         if st.button("Prepare PPT Report"):
-    #             with st.spinner("Generating presentation slides..."):
-    #                 try:
-    #                     ppt_data = create_ppt(export_figs)
-    #                     st.session_state['ppt_bytes'] = ppt_data
-    #                     st.success("Ready!")
-    #                 except Exception as e:
-    #                     st.error(f"Error generating PPT. Please ensure 'kaleido' is installed. Error: {e}")
-    #         
-    #         if 'ppt_bytes' in st.session_state:
-    #             st.download_button(
-    #                 label="📥 Download PowerPoint File",
-    #                 data=st.session_state['ppt_bytes'],
-    #                 file_name=f"Dashboard_Report_{uploaded_file.name}.pptx",
-    #                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    #                 type="primary"
-    #             )
+    # ... (PPT code remains commented out)
 else:
     st.info("👈 Upload a CSV to begin.")
