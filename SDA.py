@@ -152,9 +152,27 @@ def process_data(file_bytes):
                 return "1", au_str, f"{au_str}-0"
 
         df[['AU_Pos', 'AU_Class', 'AU_SubUnit']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
-        df['Alarm_Code'] = df['Data_Alarm'].str.strip()
-        df['Alarm_Type'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"type": "Unknown"})['type'] if x else "None")
-        df['Alarm_Meaning'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"name": ""})['name'] if x else "")
+        
+        # --- Advanced Fuzzy Alarm Matcher ---
+        def map_alarm_type(c):
+            if pd.isna(c): return "None"
+            c_str = str(c).strip()
+            if not c_str: return "None"
+            if c_str in ALARM_MAP: return ALARM_MAP[c_str]["type"]
+            
+            # Fuzzy Fallbacks for unlisted variations (e.g. QC.Low, Samp Error, etc.)
+            c_up = c_str.upper()
+            if "QC" in c_up: return "QC"
+            if "SAMP" in c_up: return "Pre-Analytical"
+            if "REAG" in c_up or "OBS" in c_up: return "Reagent"
+            if "CAL" in c_up or "STD" in c_up or "DUP" in c_up: return "Calibration"
+            if "ISE" in c_up or "ABS" in c_up or "KIN" in c_up or "REAC" in c_up: return "Analytical"
+            return "Unknown"
+
+        # Safely extract codes without triggering Pandas NaN traps
+        df['Alarm_Code'] = df['Data_Alarm'].apply(lambda x: "" if pd.isna(x) else str(x).strip())
+        df['Alarm_Type'] = df['Alarm_Code'].apply(map_alarm_type)
+        df['Alarm_Meaning'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"name": x})['name'] if x else "")
 
         mappings = {
             "Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
@@ -214,7 +232,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.0\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.1\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -348,7 +366,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                 st.plotly_chart(fig_r_bar, use_container_width=True)
                 export_figs["Top Rerun Assays"] = fig_r_bar
                 
-                # Dynamic Tiered KPI Insight Logic
                 top_assay = rerun_df.iloc[0]['Parameter']
                 if rerun_rate < 2.0:
                     render_insight("System Yield", f"Excellent First-Pass Yield. Rerun rate is {rerun_rate:.1f}%.", "Reagent waste and TAT delays are minimal.", "System is performing optimally.", "success")
@@ -362,7 +379,9 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
 
     with t[4]:
         st.subheader("Analytical Risk & Error Intelligence")
-        err_df = df[df['Alarm_Code'] != ""].copy()
+        
+        # Strictly filter out 'None' so normal patient results don't show up in the Pie Chart
+        err_df = df[df['Alarm_Type'] != "None"].copy()
         
         if not err_df.empty:
             type_counts = err_df['Alarm_Type'].value_counts().reset_index(name='Count')
@@ -397,10 +416,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     with t[5]:
         st.subheader("Sub-Module Load Balancing")
         
-        # We only want to compare subunits within the same base class
-        # (e.g., e 801-1 vs e 801-2, not e 801 vs c 503)
         load_df = df.dropna(subset=['AU_Class', 'AU_SubUnit']).copy()
-        
         if not load_df.empty:
             load_summary = load_df['AU_SubUnit'].value_counts().reset_index()
             load_summary.columns = ['Unit', 'Count']
@@ -410,7 +426,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             st.plotly_chart(fig_load, use_container_width=True)
             export_figs["Sub-Module Load"] = fig_load
             
-            # --- Identical Parallel Module Insight Logic ---
             imbalance_found = False
             imbalance_msgs = []
             
@@ -418,7 +433,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                 class_df = load_df[load_df['AU_Class'] == au_class]
                 sub_load = class_df['AU_SubUnit'].value_counts()
                 
-                # Only check for imbalance if there are multiple identical sub-modules (e.g. > 1 of e 801)
                 if len(sub_load) > 1:
                     imb = sub_load.max() / sub_load.min()
                     if imb > 1.25:
