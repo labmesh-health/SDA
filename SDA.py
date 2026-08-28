@@ -141,16 +141,21 @@ def process_data(file_bytes):
         df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
         df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
 
+        # --- THE REGEX UPGRADE: Correctly parses complex multi-line configurations (e.g. '3-e 801-2') ---
         def parse_au(au_str):
-            if not au_str or pd.isna(au_str): return "N/A", "Unknown", "Unknown"
+            if pd.isna(au_str) or str(au_str).strip() in ["", "System (Calculated)", "Unknown", "nan"]: 
+                return "N/A", "Unknown", "Unknown"
+            
             au_str = str(au_str).strip()
-            if '-' in au_str:
-                parts = au_str.split('-')
-                pos, mtype = parts[0], (parts[1] if len(parts) > 1 else "N/A")
-                sub = parts[2] if len(parts) > 2 else "0"
-                return pos, mtype, f"{mtype}-{sub}"
+            match = re.match(r'(?:(\d+)-)?([a-zA-Z]+\s*\d*|-?ISE|-?EFLW)(?:-(.+))?', au_str)
+            
+            if match:
+                line = match.group(1) if match.group(1) else "1"
+                mtype = match.group(2).strip('- ').strip()
+                sub = match.group(3) if match.group(3) else "0"
+                return line, mtype, f"{line}-{mtype}-{sub}"
             else:
-                return "1", au_str, f"{au_str}-0"
+                return "1", au_str, f"1-{au_str}-0"
 
         df[['AU_Pos', 'AU_Class', 'AU_SubUnit']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
         
@@ -158,7 +163,6 @@ def process_data(file_bytes):
             if pd.isna(c): return "None"
             c_str = str(c).strip()
             
-            # HARD FIX: Ignore standalone raw numbers and treat them as 'None' (No error)
             if not c_str or c_str.lstrip('-').replace('.','',1).isdigit(): 
                 return "None"
                 
@@ -215,7 +219,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.6\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.7\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -240,12 +244,10 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
 
     with t[1]:
         st.subheader("Laboratory Throughput & Peak Stress")
-        # Filter out Software/Calculated "Unknown" machines to focus solely on physical mechanical pipetting load
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
         u_df = u_df[u_df['AU_SubUnit'] != "Unknown"]
         
         if not u_df.empty:
-            # FIX: Group explicitly by INDIVIDUAL SubUnit (e.g. 'e 801-1' instead of just 'e 801')
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
             h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_SubUnit']).size().reset_index(name='Tests')
@@ -264,7 +266,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             else:
                 caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275)}
             
-            # Extract Peak load explicitly against the specific sub-unit capacity
             peak_stats = []
             for sub_unit in h_util['AU_SubUnit'].unique():
                 max_cap, prac_cap = 0, 0
@@ -309,7 +310,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             export_figs["Hourly Arrival Pattern"] = fig_arr
         else: st.info("No arrival data available for analysis.")
 
-        # --- NEW FEATURE: Sample Routing & Consolidation ---
         st.markdown("---")
         st.subheader("🔀 Sample Routing & Consolidation")
         
@@ -319,7 +319,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         if not route_df.empty:
             def categorize_module(mod):
                 m = str(mod).lower()
-                if 'c 3' in m or 'c 5' in m or 'c 7' in m: return 'Chemistry'
+                if 'c 3' in m or 'c 5' in m or 'c 7' in m or 'ise' in m: return 'Chemistry'
                 if 'e 4' in m or 'e 8' in m: return 'Immunology'
                 return 'Other'
             
@@ -368,11 +368,11 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             
             c1, c2 = st.columns(2)
             with c1: 
-                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|ISE", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="Chemistry Stability")
+                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|703|ISE", case=False, na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="Chemistry Stability")
                 st.plotly_chart(fig_chem, use_container_width=True)
                 export_figs["Chemistry QC Stability"] = fig_chem
             with c2: 
-                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="IA Stability")
+                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", case=False, na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="IA Stability")
                 st.plotly_chart(fig_ia, use_container_width=True)
                 export_figs["Immunoassay QC Stability"] = fig_ia
             
@@ -419,7 +419,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         st.subheader("Analytical Risk & Error Intelligence")
         
         err_df = df[df['Alarm_Type'] != "None"].copy()
-        
         err_df['Module'] = err_df['Module'].apply(lambda x: "System (Calculated)" if pd.isna(x) or str(x).strip() == "" else str(x).strip())
         
         if not err_df.empty:
