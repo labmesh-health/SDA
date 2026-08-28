@@ -141,10 +141,9 @@ def process_data(file_bytes):
         df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
         df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
 
-        # --- THE REGEX UPGRADE: Correctly parses complex multi-line configurations (e.g. '3-e 801-2') ---
         def parse_au(au_str):
             if pd.isna(au_str) or str(au_str).strip() in ["", "System (Calculated)", "Unknown", "nan"]: 
-                return "N/A", "Unknown", "Unknown"
+                return "N/A", "Unknown", "Unknown", "Unknown"
             
             au_str = str(au_str).strip()
             match = re.match(r'(?:(\d+)-)?([a-zA-Z]+\s*\d*|-?ISE|-?EFLW)(?:-(.+))?', au_str)
@@ -153,11 +152,12 @@ def process_data(file_bytes):
                 line = match.group(1) if match.group(1) else "1"
                 mtype = match.group(2).strip('- ').strip()
                 sub = match.group(3) if match.group(3) else "0"
-                return line, mtype, f"{line}-{mtype}-{sub}"
+                # AU_Module represents the FULL hardware block (e.g. '1-c 703') for capacity calculations
+                return line, mtype, f"{line}-{mtype}-{sub}", f"{line}-{mtype}"
             else:
-                return "1", au_str, f"1-{au_str}-0"
+                return "1", au_str, f"1-{au_str}-0", f"1-{au_str}"
 
-        df[['AU_Pos', 'AU_Class', 'AU_SubUnit']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
+        df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
         
         def map_alarm_type(c):
             if pd.isna(c): return "None"
@@ -219,7 +219,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.7\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.8\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -245,21 +245,22 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
     with t[1]:
         st.subheader("Laboratory Throughput & Peak Stress")
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
-        u_df = u_df[u_df['AU_SubUnit'] != "Unknown"]
+        u_df = u_df[u_df['AU_Module'] != "Unknown"]
         
         if not u_df.empty:
+            # FIX: Group explicitly by full MODULE block (e.g. '1-c 703') instead of sub-unit
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
-            h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_SubUnit']).size().reset_index(name='Tests')
+            h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Module']).size().reset_index(name='Tests')
             
-            sel_m = st.selectbox("View hourly sampling pattern for:", h_util['AU_SubUnit'].unique().tolist())
-            fig_line = px.line(h_util[h_util['AU_SubUnit'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=LAB_COLORS, title=f"Hourly Instrument Sampling Rate: {sel_m}")
+            sel_m = st.selectbox("View hourly sampling pattern for:", h_util['AU_Module'].unique().tolist())
+            fig_line = px.line(h_util[h_util['AU_Module'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=LAB_COLORS, title=f"Hourly Instrument Sampling Rate: {sel_m}")
             fig_line.update_traces(textposition="top center")
             fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_line, use_container_width=True)
             export_figs["Instrument Sampling Rate"] = fig_line
             
-            is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_SubUnit'])
+            is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_Module'])
             
             if is_pure:
                 caps = {"c 303": (450, 360), "ISE": (450, 360), "e 402": (120, 100)}
@@ -267,16 +268,16 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                 caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275)}
             
             peak_stats = []
-            for sub_unit in h_util['AU_SubUnit'].unique():
+            for module in h_util['AU_Module'].unique():
                 max_cap, prac_cap = 0, 0
                 for m_type, (m_max, m_prac) in caps.items():
-                    if m_type in str(sub_unit):
+                    if m_type in str(module):
                         max_cap, prac_cap = m_max, m_prac
                         break
                         
                 if max_cap > 0:
-                    peak_val = h_util[h_util['AU_SubUnit'] == sub_unit]['Tests'].max()
-                    peak_stats.append({'Module': sub_unit, 'Peak': peak_val, 'Prac': prac_cap, 'Theo': max_cap})
+                    peak_val = h_util[h_util['AU_Module'] == module]['Tests'].max()
+                    peak_stats.append({'Module': module, 'Peak': peak_val, 'Prac': prac_cap, 'Theo': max_cap})
             
             if peak_stats:
                 fig_p = go.Figure()
@@ -284,7 +285,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                 for i, d in enumerate(peak_stats):
                     fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
                     fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
-                fig_p.update_layout(title="Peak Hourly Stress vs Individual Module Capacity (Orange = Practical Limit)")
+                fig_p.update_layout(title="Peak Hourly Stress vs Full Module Capacity (Orange = Practical Limit)")
                 st.plotly_chart(fig_p, use_container_width=True)
                 export_figs["Peak Stress vs Capacity"] = fig_p
 
