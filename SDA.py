@@ -196,25 +196,6 @@ def render_insight(title, obs, impact, pre, status="info"):
         <div style="display: flex; gap: 20px;"><div style="flex: 1;"><strong>Observation</strong><br>{obs}</div>
         <div style="flex: 1;"><strong>Impact</strong><br>{impact}</div><div style="flex: 1;"><strong>Action/Checklist</strong><br>{pre}</div></div></div>""", unsafe_allow_html=True)
 
-def create_ppt(figs_dict):
-    prs = Presentation()
-    for title, fig in figs_dict.items():
-        fig.layout.paper_bgcolor = '#ffffff'
-        fig.layout.plot_bgcolor = '#ffffff'
-        fig.update_layout(template="plotly_white", font=dict(color="#000000"))
-        
-        img_bytes = fig.to_image(format="png", engine="kaleido", width=1000, height=550, scale=2)
-        img_stream = io.BytesIO(img_bytes)
-        
-        slide = prs.slides.add_slide(prs.slide_layouts[5])
-        slide.shapes.title.text = title
-        slide.shapes.add_picture(img_stream, Inches(0.5), Inches(1.5), width=Inches(9))
-        
-    ppt_stream = io.BytesIO()
-    prs.save(ppt_stream)
-    ppt_stream.seek(0)
-    return ppt_stream
-
 # --- Sidebar ---
 with st.sidebar:
     st.title("💡 converterPRO")
@@ -234,7 +215,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.5\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.6\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -259,49 +240,58 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
 
     with t[1]:
         st.subheader("Laboratory Throughput & Peak Stress")
+        # Filter out Software/Calculated "Unknown" machines to focus solely on physical mechanical pipetting load
         u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
-        u_df = u_df[u_df['AU_Class'] != "Unknown"]
+        u_df = u_df[u_df['AU_SubUnit'] != "Unknown"]
         
         if not u_df.empty:
+            # FIX: Group explicitly by INDIVIDUAL SubUnit (e.g. 'e 801-1' instead of just 'e 801')
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
-            h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Class']).size().reset_index(name='Tests')
+            h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_SubUnit']).size().reset_index(name='Tests')
             
-            sel_m = st.selectbox("View sampling pattern for:", h_util['AU_Class'].unique().tolist())
-            fig_line = px.line(h_util[h_util['AU_Class'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=LAB_COLORS, title=f"Instrument Sampling Rate (Tests/Hr): {sel_m}")
+            sel_m = st.selectbox("View hourly sampling pattern for:", h_util['AU_SubUnit'].unique().tolist())
+            fig_line = px.line(h_util[h_util['AU_SubUnit'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=LAB_COLORS, title=f"Hourly Instrument Sampling Rate: {sel_m}")
             fig_line.update_traces(textposition="top center")
             fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
             st.plotly_chart(fig_line, use_container_width=True)
             export_figs["Instrument Sampling Rate"] = fig_line
             
-            is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_Class'])
+            is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_SubUnit'])
             
             if is_pure:
-                caps = {"c 303": (450, 360), "ISE": (450, 360), "e 402": (120, 100), "EFLW": (0,0)}
+                caps = {"c 303": (450, 360), "ISE": (450, 360), "e 402": (120, 100)}
             else:
-                caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275), "EFLW": (0,0)}
+                caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275)}
             
+            # Extract Peak load explicitly against the specific sub-unit capacity
             peak_stats = []
-            for m_type, (m_max, m_prac) in caps.items():
-                if any(m_type in str(x) for x in h_util['AU_Class']) and m_max > 0:
-                    peak_val = h_util[h_util['AU_Class'].str.contains(m_type, na=False)]['Tests'].max()
-                    peak_stats.append({'Module': m_type, 'Peak': peak_val, 'Prac': m_prac, 'Theo': m_max})
+            for sub_unit in h_util['AU_SubUnit'].unique():
+                max_cap, prac_cap = 0, 0
+                for m_type, (m_max, m_prac) in caps.items():
+                    if m_type in str(sub_unit):
+                        max_cap, prac_cap = m_max, m_prac
+                        break
+                        
+                if max_cap > 0:
+                    peak_val = h_util[h_util['AU_SubUnit'] == sub_unit]['Tests'].max()
+                    peak_stats.append({'Module': sub_unit, 'Peak': peak_val, 'Prac': prac_cap, 'Theo': max_cap})
             
             if peak_stats:
                 fig_p = go.Figure()
-                fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], text=[int(d['Peak']) for d in peak_stats], textposition='auto', name="Actual Peak", marker_color='#0b41cd'))
+                fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], text=[int(d['Peak']) for d in peak_stats], textposition='auto', name="Actual Peak (Tests/Hr)", marker_color='#0b41cd'))
                 for i, d in enumerate(peak_stats):
                     fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
                     fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
-                fig_p.update_layout(title="Peak Stress vs Module Capacity (Orange = Practical Limit)")
+                fig_p.update_layout(title="Peak Hourly Stress vs Individual Module Capacity (Orange = Practical Limit)")
                 st.plotly_chart(fig_p, use_container_width=True)
                 export_figs["Peak Stress vs Capacity"] = fig_p
 
                 stress_mod = [d['Module'] for d in peak_stats if d['Peak'] > d['Prac']]
                 if stress_mod:
-                    render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
+                    render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits in a single hour.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
                 else:
-                    render_insight("Throughput Efficiency", "All modules are operating within practical capacity.", "Workflow and TAT should remain stable without bottlenecks.", "Optimal loading rate detected.", "success")
+                    render_insight("Throughput Efficiency", "All physical modules are operating within hourly capacity limits.", "Workflow and TAT should remain stable without pipetting bottlenecks.", "Optimal loading rate detected.", "success")
         else: st.info("No mechanical sampling data available for throughput analysis.")
         
         st.markdown("---")
