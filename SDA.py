@@ -234,7 +234,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.4\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.5\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -319,6 +319,50 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             export_figs["Hourly Arrival Pattern"] = fig_arr
         else: st.info("No arrival data available for analysis.")
 
+        # --- NEW FEATURE: Sample Routing & Consolidation ---
+        st.markdown("---")
+        st.subheader("🔀 Sample Routing & Consolidation")
+        
+        route_df = df.dropna(subset=['AU_Class', 'Sample_ID']).copy()
+        route_df = route_df[route_df['AU_Class'] != "Unknown"]
+        
+        if not route_df.empty:
+            def categorize_module(mod):
+                m = str(mod).lower()
+                if 'c 3' in m or 'c 5' in m or 'c 7' in m: return 'Chemistry'
+                if 'e 4' in m or 'e 8' in m: return 'Immunology'
+                return 'Other'
+            
+            route_df['Route_Cat'] = route_df['AU_Class'].apply(categorize_module)
+            route_df = route_df[route_df['Route_Cat'].isin(['Chemistry', 'Immunology'])]
+            
+            if not route_df.empty:
+                sample_mix = route_df.groupby('Sample_ID')['Route_Cat'].unique()
+                
+                def get_mix_type(cats):
+                    c_list = list(cats)
+                    if 'Chemistry' in c_list and 'Immunology' in c_list: return 'Both (Chem & Immuno)'
+                    if 'Chemistry' in c_list: return 'Chemistry Only'
+                    if 'Immunology' in c_list: return 'Immunology Only'
+                    return 'Unknown'
+                    
+                mix_counts = sample_mix.apply(get_mix_type).value_counts().reset_index()
+                mix_counts.columns = ['Routing', 'Tubes (Samples)']
+                
+                colA, colB = st.columns([1, 2])
+                with colA:
+                    st.dataframe(mix_counts, use_container_width=True)
+                with colB:
+                    fig_mix = px.pie(mix_counts, values='Tubes (Samples)', names='Routing', hole=0.4, 
+                                     title="Sample Consolidation (Chem vs. IA)",
+                                     color_discrete_sequence=['#0b41cd', '#009688', '#ff9800'])
+                    st.plotly_chart(fig_mix, use_container_width=True)
+                    export_figs["Sample Routing"] = fig_mix
+            else:
+                st.info("No Chemistry or Immunology routing data available to summarize.")
+        else:
+            st.info("No routing data available.")
+
     with t[2]:
         st.subheader("QC Precision & Stability")
         q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
@@ -386,7 +430,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         
         err_df = df[df['Alarm_Type'] != "None"].copy()
         
-        # --- THE FIX: Replace invisible blank modules with a clear "System (Calculated)" label ---
         err_df['Module'] = err_df['Module'].apply(lambda x: "System (Calculated)" if pd.isna(x) or str(x).strip() == "" else str(x).strip())
         
         if not err_df.empty:
@@ -457,7 +500,5 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                     render_insight("Load Balance", "Single sub-modules detected per class.", "Natural test mix displayed.", "No parallel balancing required.", "info")
         else: st.info("No physical module load data found.")
 
-    # --- PPT Export Section (Currently Disabled) ---
-    # ... (PPT code remains commented out)
 else:
     st.info("👈 Upload a CSV to begin.")
