@@ -141,6 +141,9 @@ def process_data(file_bytes):
         df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
         df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
 
+        # --- THE REGEX UPGRADE: Correctly parses complex multi-line configurations ---
+        # It generates both 'AU_SubUnit' (for hardware load tracking) 
+        # and 'AU_Module' (for proper full-module throughput capacity tracking)
         def parse_au(au_str):
             if pd.isna(au_str) or str(au_str).strip() in ["", "System (Calculated)", "Unknown", "nan"]: 
                 return "N/A", "Unknown", "Unknown", "Unknown"
@@ -152,8 +155,9 @@ def process_data(file_bytes):
                 line = match.group(1) if match.group(1) else "1"
                 mtype = match.group(2).strip('- ').strip()
                 sub = match.group(3) if match.group(3) else "0"
-                # AU_Module represents the FULL hardware block (e.g. '1-c 703') for capacity calculations
-                return line, mtype, f"{line}-{mtype}-{sub}", f"{line}-{mtype}"
+                full_sub_unit = f"{line}-{mtype}-{sub}"
+                full_module = f"{line}-{mtype}"
+                return line, mtype, full_sub_unit, full_module
             else:
                 return "1", au_str, f"1-{au_str}-0", f"1-{au_str}"
 
@@ -163,6 +167,7 @@ def process_data(file_bytes):
             if pd.isna(c): return "None"
             c_str = str(c).strip()
             
+            # HARD FIX: Ignore standalone raw numbers and treat them as 'None' (No error)
             if not c_str or c_str.lstrip('-').replace('.','',1).isdigit(): 
                 return "None"
                 
@@ -311,6 +316,7 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             export_figs["Hourly Arrival Pattern"] = fig_arr
         else: st.info("No arrival data available for analysis.")
 
+        # --- NEW FEATURE: Sample Routing & Consolidation ---
         st.markdown("---")
         st.subheader("🔀 Sample Routing & Consolidation")
         
