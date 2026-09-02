@@ -141,9 +141,6 @@ def process_data(file_bytes):
         df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
         df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
 
-        # --- THE REGEX UPGRADE: Correctly parses complex multi-line configurations ---
-        # It generates both 'AU_SubUnit' (for hardware load tracking) 
-        # and 'AU_Module' (for proper full-module throughput capacity tracking)
         def parse_au(au_str):
             if pd.isna(au_str) or str(au_str).strip() in ["", "System (Calculated)", "Unknown", "nan"]: 
                 return "N/A", "Unknown", "Unknown", "Unknown"
@@ -155,9 +152,7 @@ def process_data(file_bytes):
                 line = match.group(1) if match.group(1) else "1"
                 mtype = match.group(2).strip('- ').strip()
                 sub = match.group(3) if match.group(3) else "0"
-                full_sub_unit = f"{line}-{mtype}-{sub}"
-                full_module = f"{line}-{mtype}"
-                return line, mtype, full_sub_unit, full_module
+                return line, mtype, f"{line}-{mtype}-{sub}", f"{line}-{mtype}"
             else:
                 return "1", au_str, f"1-{au_str}-0", f"1-{au_str}"
 
@@ -167,7 +162,6 @@ def process_data(file_bytes):
             if pd.isna(c): return "None"
             c_str = str(c).strip()
             
-            # HARD FIX: Ignore standalone raw numbers and treat them as 'None' (No error)
             if not c_str or c_str.lstrip('-').replace('.','',1).isdigit(): 
                 return "None"
                 
@@ -224,7 +218,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.8\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v9.9\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -253,7 +247,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         u_df = u_df[u_df['AU_Module'] != "Unknown"]
         
         if not u_df.empty:
-            # FIX: Group explicitly by full MODULE block (e.g. '1-c 703') instead of sub-unit
             u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
             u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
             h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Module']).size().reset_index(name='Tests')
@@ -316,7 +309,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             export_figs["Hourly Arrival Pattern"] = fig_arr
         else: st.info("No arrival data available for analysis.")
 
-        # --- NEW FEATURE: Sample Routing & Consolidation ---
         st.markdown("---")
         st.subheader("🔀 Sample Routing & Consolidation")
         
@@ -494,7 +486,21 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                     render_insight("Load Balance", "Workload is properly distributed among identical parallel modules.", "Even mechanical wear detected. Maximizing instrument lifespan.", "Mapping is optimal.", "success")
                 else:
                     render_insight("Load Balance", "Single sub-modules detected per class.", "Natural test mix displayed.", "No parallel balancing required.", "info")
-        else: st.info("No physical module load data found.")
+            
+            st.markdown("---")
+            st.subheader("📋 Assay Mapping & Volume Matrix")
+            
+            test_matrix = load_df.pivot_table(index='Parameter', columns='AU_SubUnit', aggfunc='size', fill_value=0)
+            test_matrix['Total Volume'] = test_matrix.sum(axis=1)
+            test_matrix = test_matrix.sort_values('Total Volume', ascending=False).reset_index()
+            
+            st.dataframe(
+                test_matrix.style.background_gradient(cmap='Blues', subset=test_matrix.columns[1:-1]),
+                use_container_width=True
+            )
+
+        else: 
+            st.info("No physical module load data found.")
 
 else:
     st.info("👈 Upload a CSV to begin.")
