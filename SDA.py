@@ -494,10 +494,8 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             test_matrix['Total Volume'] = test_matrix.sum(axis=1)
             test_matrix = test_matrix.sort_values('Total Volume', ascending=False).reset_index()
             
-            st.dataframe(
-                test_matrix.style.background_gradient(cmap='Blues', subset=test_matrix.columns[1:-1]),
-                use_container_width=True
-            )
+            # Replaced the Pandas Styler background_gradient with a standard robust dataframe rendering
+            st.dataframe(test_matrix, use_container_width=True)
 
         else: 
             st.info("No physical module load data found.")
