@@ -218,7 +218,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v9.9\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v10.0\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -457,45 +457,63 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         load_df = load_df[load_df['AU_SubUnit'] != "Unknown"]
         
         if not load_df.empty:
-            load_summary = load_df['AU_SubUnit'].value_counts().reset_index()
-            load_summary.columns = ['Unit', 'Count']
             
-            fig_load = px.bar(load_summary, x='Unit', y='Count', text='Count', color='Unit', color_discrete_sequence=LAB_COLORS, title="Mechanical Load per Sub-Unit")
-            fig_load.update_traces(textposition='auto')
-            st.plotly_chart(fig_load, use_container_width=True)
-            export_figs["Sub-Module Load"] = fig_load
+            # --- 1. NEW COMPONENT: Module Workload Cards (Matches top of screenshot) ---
+            st.markdown("##### 🗄️ Workload Distribution by Module")
+            module_list = load_df['AU_Module'].unique()
+            cols = st.columns(len(module_list) if len(module_list) > 0 else 1)
             
-            imbalance_found = False
-            imbalance_msgs = []
-            
-            for au_class in load_df['AU_Class'].unique():
-                class_df = load_df[load_df['AU_Class'] == au_class]
-                sub_load = class_df['AU_SubUnit'].value_counts()
+            for i, mod in enumerate(sorted(module_list)):
+                mod_df = load_df[load_df['AU_Module'] == mod]
+                total_workload = len(mod_df)
                 
-                if len(sub_load) > 1:
-                    imb = sub_load.max() / sub_load.min()
-                    if imb > 1.25:
-                        imbalance_found = True
-                        imbalance_msgs.append(f"{au_class} ({imb:.1f}x)")
-                        
-            if imbalance_found:
-                render_insight("Mechanical Wear Skew", f"Imbalance detected within identical modules: **{', '.join(imbalance_msgs)}**.", "Uneven wear accelerates part degradation and reduces module lifespan on specific analytical units.", "Re-map high-volume tests across parallel modules to balance the workload.", "warning")
-            else:
-                parallel_exists = any(len(load_df[load_df['AU_Class'] == c]['AU_SubUnit'].unique()) > 1 for c in load_df['AU_Class'].unique())
-                if parallel_exists:
-                    render_insight("Load Balance", "Workload is properly distributed among identical parallel modules.", "Even mechanical wear detected. Maximizing instrument lifespan.", "Mapping is optimal.", "success")
-                else:
-                    render_insight("Load Balance", "Single sub-modules detected per class.", "Natural test mix displayed.", "No parallel balancing required.", "info")
+                # Breakdown of sub-units (e.g. MC1, MC2)
+                sub_workloads = mod_df['AU_SubUnit'].value_counts().sort_index()
+                sub_text = "".join([f"<br><span style='color:#555;'>{sub} - Workload: <strong style='color:#0b41cd;'>{count}</strong></span>" for sub, count in sub_workloads.items()])
+                
+                with cols[i % len(cols)]:
+                    st.markdown(f"""
+                    <div style="border: 1px solid #cce0ff; border-radius: 8px; padding: 15px; background: white; margin-bottom: 20px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);">
+                        <h4 style="margin: 0; color: #0b41cd; font-family: 'Open Sans', sans-serif;">{mod}</h4>
+                        <p style="margin: 5px 0 0 0; font-size: 15px;">Total Workload: <strong>{total_workload}</strong></p>
+                        <div style="font-size: 14px; margin-top: 10px; border-top: 1px solid #eee; padding-top: 5px;">
+                            {sub_text}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
             
             st.markdown("---")
-            st.subheader("📋 Assay Mapping & Volume Matrix")
             
-            test_matrix = load_df.pivot_table(index='Parameter', columns='AU_SubUnit', aggfunc='size', fill_value=0)
-            test_matrix['Total Volume'] = test_matrix.sum(axis=1)
-            test_matrix = test_matrix.sort_values('Total Volume', ascending=False).reset_index()
+            # --- 2. NEW COMPONENT: Assay to Sub-Module Mapping Table (Matches bottom of screenshot) ---
+            st.markdown("##### 📋 Assay to Sub-Module Mapping")
             
-            # Replaced the Pandas Styler background_gradient with a standard robust dataframe rendering
-            st.dataframe(test_matrix, use_container_width=True)
+            # Group exactly like the screenshot: Test name | ACN | Total | Type | [Sub-modules...]
+            mapping_df = load_df.copy()
+            
+            # Calculate Totals
+            totals = mapping_df.groupby(['Parameter', 'ACN code']).size().reset_index(name='Total')
+            
+            # Pivot table to check presence in specific Measuring Cells/Sub-units
+            pivot = mapping_df.pivot_table(index=['Parameter', 'ACN code'], columns='AU_SubUnit', aggfunc='size', fill_value=0)
+            
+            # Convert numbers to "✓" for an exact visual match with the screenshot
+            for col in pivot.columns:
+                pivot[col] = pivot[col].apply(lambda x: '✓' if x > 0 else '')
+                
+            pivot = pivot.reset_index()
+            
+            # Merge and arrange columns to match screenshot UI
+            final_table = pd.merge(totals, pivot, on=['Parameter', 'ACN code'])
+            final_table['Type'] = "" # Blank column to match screenshot layout exactly
+            
+            sub_modules = [c for c in final_table.columns if c not in ['Parameter', 'ACN code', 'Total', 'Type']]
+            final_table = final_table[['Parameter', 'ACN code', 'Total', 'Type'] + sorted(sub_modules)]
+            final_table = final_table.rename(columns={'Parameter': 'Test name', 'ACN code': 'ACN'})
+            
+            # Sort by total volume descending
+            final_table = final_table.sort_values('Total', ascending=False).reset_index(drop=True)
+            
+            st.dataframe(final_table, use_container_width=True)
 
         else: 
             st.info("No physical module load data found.")
