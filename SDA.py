@@ -10,13 +10,10 @@ from pptx import Presentation
 from pptx.util import Inches
 import re
 
-# --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
 
-# --- Custom Professional Color Palette ---
 LAB_COLORS = ['#0b41cd', '#009688', '#ff9800', '#673ab7', '#e91e63', '#00bcd4', '#4caf50', '#ffc107', '#3f51b5', '#795548', '#607d8b', '#f44336']
 
-# --- Comprehensive Clinical Knowledge Base (Roche Pure & Pro) ---
 ALARM_MAP = {
     ">Abs": {"name": "ABS over", "sev": "High", "msg": "Detected foam or air aspiration, or absorbance value exceeded 3.3. Check for sample integrity.", "type": "Analytical", "action": "Check sample for bubbles/foam. Review reaction curve."},
     "ADC.E": {"name": "ADC abnormal", "sev": "Critical", "msg": "The ADC value of the primary or secondary wavelength is zero, or ISE cannot read ADC data.", "type": "Hardware", "action": "Hardware check required. Contact service if persistent."},
@@ -106,9 +103,13 @@ def process_data(file_bytes):
     row0, header_row = raw_data[0], raw_data[1]
 
     try:
-        draw_idx = header_row.index("Drawing_Date_Time")
-        cup_idx = header_row.index("Sample_Cup")
-        start_col = header_row.index("Result") 
+        draw_idx = header_row.index("Drawing_Date_Time") if "Drawing_Date_Time" in header_row else -1
+        cup_idx = header_row.index("Sample_Cup") if "Sample_Cup" in header_row else -1
+        start_col = header_row.index("Result") if "Result" in header_row else -1
+        
+        if start_col == -1:
+            return pd.DataFrame()
+            
         block_size = 11 if "EMF1" in header_row else 8
         
         block_template = header_row[start_col : start_col + block_size]
@@ -116,9 +117,9 @@ def process_data(file_bytes):
         alarm_sub_idx = next((i for i, h in enumerate(block_template) if h in ["Data_Alarm", "Alarm"]), -1)
         sampling_sub_idx = next((i for i, h in enumerate(block_template) if "Sampling_Date_Time" in h), -1)
 
-        fixed_before = header_row[:draw_idx + 1]
-        comment_cols = header_row[draw_idx + 1 : cup_idx]
-        fixed_after = header_row[cup_idx : start_col]
+        fixed_before = header_row[:draw_idx + 1] if draw_idx != -1 else []
+        comment_cols = header_row[draw_idx + 1 : cup_idx] if draw_idx != -1 and cup_idx != -1 else []
+        fixed_after = header_row[cup_idx : start_col] if cup_idx != -1 else header_row[:start_col]
         
         standard_block_headers = list(block_template)
         if module_sub_idx != -1: standard_block_headers[module_sub_idx] = "Module"
@@ -133,13 +134,24 @@ def process_data(file_bytes):
                 acn, param = (row0[col], row0[col+1]) if col+1 < len(row0) else ("", "")
                 for row_vals in raw_data[2:]:
                     if len(row_vals) > col and any(val.strip() for val in row_vals[col:col+block_size]):
-                        payload = row_vals[:draw_idx+1] + row_vals[draw_idx+1:cup_idx] + row_vals[cup_idx:start_col] + [acn, param] + row_vals[col:col+block_size]
-                        if len(payload) == len(final_headers): blocks.append(payload)
+                        payload = []
+                        if draw_idx != -1 and cup_idx != -1:
+                            payload = row_vals[:draw_idx+1] + row_vals[draw_idx+1:cup_idx] + row_vals[cup_idx:start_col]
+                        else:
+                            payload = row_vals[:start_col]
+                        payload += [acn, param] + row_vals[col:col+block_size]
+                        
+                        if len(payload) == len(final_headers): 
+                            blocks.append(payload)
         
         df = pd.DataFrame(blocks, columns=final_headers)
-        df['Arrived_Date_Time'] = pd.to_datetime(df['Arrived_Date_Time'], errors='coerce')
-        df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
-        df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
+        
+        if 'Arrived_Date_Time' in df.columns:
+            df['Arrived_Date_Time'] = pd.to_datetime(df['Arrived_Date_Time'], errors='coerce')
+        if 'Sampling_Date_Time' in df.columns:
+            df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
+        if 'Result' in df.columns:
+            df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
 
         def parse_raw_au(au_str):
             if pd.isna(au_str) or str(au_str).strip() in ["", "System (Calculated)", "Unknown", "nan"]: 
@@ -152,44 +164,40 @@ def process_data(file_bytes):
                 line = match.group(1) if match.group(1) else ""
                 mtype = match.group(2).strip('- ').strip()
                 sub = match.group(3) if match.group(3) else "0"
-                
                 full_sub = f"{line}-{mtype}-{sub}" if line else f"{mtype}-{sub}"
                 full_mod = f"{line}-{mtype}" if line else mtype
                 return line, mtype, full_sub, full_mod
             else:
                 return "", au_str, f"{au_str}-0", au_str
 
-        df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = df['Module'].apply(lambda x: pd.Series(parse_raw_au(x)))
-        
-        # --- NEW FEATURE: Infer missing line prefixes based on sample context (fixes standalone 'e 801' blocks) ---
+        if 'Module' in df.columns:
+            df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = df['Module'].apply(lambda x: pd.Series(parse_raw_au(x)))
+        else:
+            df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = pd.DataFrame([["", "Unknown", "Unknown", "Unknown"]] * len(df), index=df.index)
+
         def infer_missing_prefix(group):
             prefix_map = {}
             for _, row in group.iterrows():
-                if row['AU_Pos'] != "" and row['AU_Class'] != "Unknown":
+                if row.get('AU_Pos', '') != "" and row.get('AU_Class', 'Unknown') != "Unknown":
                     if row['AU_Class'] not in prefix_map:
                         prefix_map[row['AU_Class']] = row['AU_Pos']
             
             for idx, row in group.iterrows():
-                if row['AU_Pos'] == "" and row['AU_Class'] in prefix_map:
+                if row.get('AU_Pos', '') == "" and row.get('AU_Class', 'Unknown') in prefix_map:
                     inf_line = prefix_map[row['AU_Class']]
                     group.at[idx, 'AU_Pos'] = inf_line
                     group.at[idx, 'AU_Module'] = f"{inf_line}-{row['AU_Class']}"
-                    
                     sub = row['AU_SubUnit'].split('-')[-1]
                     group.at[idx, 'AU_SubUnit'] = f"{inf_line}-{row['AU_Class']}-{sub}"
             return group
 
-        # Apply the routing inference logic to merge prefix-less tests (like e 801-0) back to their respective physical line
         if 'Sample_ID' in df.columns:
             df = df.groupby('Sample_ID', group_keys=False).apply(infer_missing_prefix)
         
         def map_alarm_type(c):
             if pd.isna(c): return "None"
             c_str = str(c).strip()
-            
-            if not c_str or c_str.lstrip('-').replace('.','',1).isdigit(): 
-                return "None"
-                
+            if not c_str or c_str.lstrip('-').replace('.','',1).isdigit(): return "None"
             if c_str in ALARM_MAP: return ALARM_MAP[c_str]["type"]
             
             c_up = c_str.upper()
@@ -200,9 +208,13 @@ def process_data(file_bytes):
             if "ISE" in c_up or "ABS" in c_up or "KIN" in c_up or "REAC" in c_up: return "Analytical"
             return "Unknown"
 
-        df['Alarm_Code'] = df['Data_Alarm'].apply(lambda x: "" if pd.isna(x) else str(x).strip())
-        df['Alarm_Type'] = df['Alarm_Code'].apply(map_alarm_type)
-        df['Alarm_Meaning'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"name": x})['name'] if x else "")
+        if 'Data_Alarm' in df.columns:
+            df['Alarm_Code'] = df['Data_Alarm'].apply(lambda x: "" if pd.isna(x) else str(x).strip())
+            df['Alarm_Type'] = df['Alarm_Code'].apply(map_alarm_type)
+            df['Alarm_Meaning'] = df['Alarm_Code'].apply(lambda x: ALARM_MAP.get(x, {"name": x})['name'] if x else "")
+        else:
+            df['Alarm_Code'] = ""
+            df['Alarm_Type'] = "None"
 
         mappings = {
             "Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
@@ -224,18 +236,27 @@ def render_insight(title, obs, impact, pre, status="info"):
         <div style="display: flex; gap: 20px;"><div style="flex: 1;"><strong>Observation</strong><br>{obs}</div>
         <div style="flex: 1;"><strong>Impact</strong><br>{impact}</div><div style="flex: 1;"><strong>Action/Checklist</strong><br>{pre}</div></div></div>""", unsafe_allow_html=True)
 
-# --- Sidebar ---
 with st.sidebar:
     st.title("💡 converterPRO")
     uploaded_file = st.file_uploader("Upload Instrument CSV", type=["csv"])
     if uploaded_file:
         raw_df = process_data(uploaded_file.getvalue())
-        if raw_df is not None:
+        if raw_df is not None and not raw_df.empty:
             st.markdown("---")
             st.subheader("📅 Filter View")
-            min_d, max_d = raw_df['Arrived_Date_Time'].min().date(), raw_df['Arrived_Date_Time'].max().date()
-            sel_range = st.date_input("Date Range", [min_d, max_d], min_value=min_d, max_value=max_d)
-            sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
+            
+            if 'Arrived_Date_Time' in raw_df.columns:
+                valid_dates = raw_df['Arrived_Date_Time'].dropna()
+                if not valid_dates.empty:
+                    min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
+                    sel_range = st.date_input("Date Range", [min_d, max_d], min_value=min_d, max_value=max_d)
+                else:
+                    sel_range = None
+            else: sel_range = None
+
+            if 'Discrimination' in raw_df.columns:
+                sel_cats = st.multiselect("Data Categories", raw_df['Discrimination'].unique().tolist(), default=raw_df['Discrimination'].unique().tolist())
+            else: sel_cats = []
             
             st.markdown("---")
             st.subheader("🛡️ Privacy & Compliance")
@@ -243,18 +264,24 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v10.1\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v10.2\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
 export_figs = {}
 
-# --- Main App ---
-if uploaded_file and 'raw_df' in locals() and raw_df is not None:
-    start_d, end_d = sel_range[0], (sel_range[1] if len(sel_range) > 1 else sel_range[0])
-    mask = (raw_df['Arrived_Date_Time'].dt.date >= start_d) & (raw_df['Arrived_Date_Time'].dt.date <= end_d) & (raw_df['Discrimination'].isin(sel_cats))
+if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.empty:
+    df = raw_df.copy()
     
-    df = raw_df.loc[mask].copy()
+    if sel_range and len(sel_range) > 0 and 'Arrived_Date_Time' in df.columns:
+        start_d = sel_range[0]
+        end_d = sel_range[1] if len(sel_range) > 1 else sel_range[0]
+        mask = (df['Arrived_Date_Time'].dt.date >= start_d) & (df['Arrived_Date_Time'].dt.date <= end_d)
+        df = df.loc[mask]
+        
+    if 'Discrimination' in df.columns and sel_cats:
+        df = df[df['Discrimination'].isin(sel_cats)]
+    
     if scrub_phi:
         for col in df.columns:
             if 'Comment' in col:
@@ -268,276 +295,292 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
 
     with t[1]:
         st.subheader("Laboratory Throughput & Peak Stress")
-        u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
-        u_df = u_df[u_df['AU_Module'] != "Unknown"]
-        
-        if not u_df.empty:
-            u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
-            u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
-            h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Module']).size().reset_index(name='Tests')
+        if 'Sampling_Date_Time' in df.columns and 'AU_Module' in df.columns:
+            u_df = df.dropna(subset=['Sampling_Date_Time']).copy()
+            u_df = u_df[u_df['AU_Module'] != "Unknown"]
             
-            sel_m = st.selectbox("View hourly sampling pattern for:", h_util['AU_Module'].unique().tolist())
-            fig_line = px.line(h_util[h_util['AU_Module'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=LAB_COLORS, title=f"Hourly Instrument Sampling Rate: {sel_m}")
-            fig_line.update_traces(textposition="top center")
-            fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
-            st.plotly_chart(fig_line, use_container_width=True)
-            export_figs["Instrument Sampling Rate"] = fig_line
-            
-            is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_Module'])
-            
-            if is_pure:
-                caps = {"c 303": (450, 360), "ISE": (450, 360), "e 402": (120, 100)}
-            else:
-                caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275)}
-            
-            peak_stats = []
-            for module in h_util['AU_Module'].unique():
-                max_cap, prac_cap = 0, 0
-                for m_type, (m_max, m_prac) in caps.items():
-                    if m_type in str(module):
-                        max_cap, prac_cap = m_max, m_prac
-                        break
-                        
-                if max_cap > 0:
-                    peak_val = h_util[h_util['AU_Module'] == module]['Tests'].max()
-                    peak_stats.append({'Module': module, 'Peak': peak_val, 'Prac': prac_cap, 'Theo': max_cap})
-            
-            if peak_stats:
-                fig_p = go.Figure()
-                fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], text=[int(d['Peak']) for d in peak_stats], textposition='auto', name="Actual Peak (Tests/Hr)", marker_color='#0b41cd'))
-                for i, d in enumerate(peak_stats):
-                    fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
-                    fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
-                fig_p.update_layout(title="Peak Hourly Stress vs Full Module Capacity (Orange = Practical Limit)")
-                st.plotly_chart(fig_p, use_container_width=True)
-                export_figs["Peak Stress vs Capacity"] = fig_p
-
-                stress_mod = [d['Module'] for d in peak_stats if d['Peak'] > d['Prac']]
-                if stress_mod:
-                    render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits in a single hour.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
+            if not u_df.empty:
+                u_df['S_Hour'] = u_df['Sampling_Date_Time'].dt.hour
+                u_df['S_Date'] = u_df['Sampling_Date_Time'].dt.date.astype(str) 
+                h_util = u_df.groupby(['S_Date', 'S_Hour', 'AU_Module']).size().reset_index(name='Tests')
+                
+                sel_m = st.selectbox("View hourly sampling pattern for:", h_util['AU_Module'].unique().tolist())
+                fig_line = px.line(h_util[h_util['AU_Module'] == sel_m], x='S_Hour', y='Tests', color='S_Date', text='Tests', markers=True, color_discrete_sequence=LAB_COLORS, title=f"Hourly Instrument Sampling Rate: {sel_m}")
+                fig_line.update_traces(textposition="top center")
+                fig_line.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
+                st.plotly_chart(fig_line, use_container_width=True)
+                export_figs["Instrument Sampling Rate"] = fig_line
+                
+                is_pure = any("303" in str(x) or "402" in str(x) for x in h_util['AU_Module'])
+                if is_pure:
+                    caps = {"c 303": (450, 360), "ISE": (450, 360), "e 402": (120, 100)}
                 else:
-                    render_insight("Throughput Efficiency", "All physical modules are operating within hourly capacity limits.", "Workflow and TAT should remain stable without pipetting bottlenecks.", "Optimal loading rate detected.", "success")
-        else: st.info("No mechanical sampling data available for throughput analysis.")
+                    caps = {"c 503": (1000, 800), "c 703": (2000, 1800), "ISE": (900, 850), "e 801": (300, 275)}
+                
+                peak_stats = []
+                for module in h_util['AU_Module'].unique():
+                    max_cap, prac_cap = 0, 0
+                    for m_type, (m_max, m_prac) in caps.items():
+                        if m_type in str(module):
+                            max_cap, prac_cap = m_max, m_prac
+                            break
+                    if max_cap > 0:
+                        peak_val = h_util[h_util['AU_Module'] == module]['Tests'].max()
+                        peak_stats.append({'Module': module, 'Peak': peak_val, 'Prac': prac_cap, 'Theo': max_cap})
+                
+                if peak_stats:
+                    fig_p = go.Figure()
+                    fig_p.add_trace(go.Bar(x=[d['Module'] for d in peak_stats], y=[d['Peak'] for d in peak_stats], text=[int(d['Peak']) for d in peak_stats], textposition='auto', name="Actual Peak (Tests/Hr)", marker_color='#0b41cd'))
+                    for i, d in enumerate(peak_stats):
+                        fig_p.add_shape(type="line", x0=i-0.3, y0=d['Prac'], x1=i+0.3, y1=d['Prac'], line=dict(color="orange", width=3, dash="dash"), name="Practical Limit")
+                        fig_p.add_shape(type="line", x0=i-0.3, y0=d['Theo'], x1=i+0.3, y1=d['Theo'], line=dict(color="red", width=3), name="Theoretical Limit")
+                    fig_p.update_layout(title="Peak Hourly Stress vs Full Module Capacity (Orange = Practical Limit)")
+                    st.plotly_chart(fig_p, use_container_width=True)
+                    export_figs["Peak Stress vs Capacity"] = fig_p
+
+                    stress_mod = [d['Module'] for d in peak_stats if d['Peak'] > d['Prac']]
+                    if stress_mod:
+                        render_insight("Peak Capacity Stress", f"{', '.join(stress_mod)} exceeded practical throughput limits in a single hour.", "Operating above practical limits significantly delays sample pipetting.", "Flatten the peak by batching routine non-urgent samples.", "warning")
+                    else:
+                        render_insight("Throughput Efficiency", "All physical modules are operating within hourly capacity limits.", "Workflow and TAT should remain stable without pipetting bottlenecks.", "Optimal loading rate detected.", "success")
+            else: st.info("No mechanical sampling data available for throughput analysis.")
+        else: st.info("Required module/sampling data columns are missing.")
         
         st.markdown("---")
         st.subheader("Total Test Arrival Pattern (24h)")
-        a_df = df.dropna(subset=['Arrived_Date_Time']).copy()
-        if not a_df.empty:
-            a_df['A_Hour'] = a_df['Arrived_Date_Time'].dt.hour
-            a_df['A_Date'] = a_df['Arrived_Date_Time'].dt.date.astype(str)
-            arr_counts = a_df.groupby(['A_Date', 'A_Hour']).size().reset_index(name='Total Tests')
-            
-            fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', text='Total Tests', color='A_Date', markers=True, color_discrete_sequence=LAB_COLORS, title="Hourly Total Volume of Arriving Tests")
-            fig_arr.update_traces(textposition="top center")
-            fig_arr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
-            st.plotly_chart(fig_arr, use_container_width=True)
-            export_figs["Hourly Arrival Pattern"] = fig_arr
-        else: st.info("No arrival data available for analysis.")
+        if 'Arrived_Date_Time' in df.columns:
+            a_df = df.dropna(subset=['Arrived_Date_Time']).copy()
+            if not a_df.empty:
+                a_df['A_Hour'] = a_df['Arrived_Date_Time'].dt.hour
+                a_df['A_Date'] = a_df['Arrived_Date_Time'].dt.date.astype(str)
+                arr_counts = a_df.groupby(['A_Date', 'A_Hour']).size().reset_index(name='Total Tests')
+                
+                fig_arr = px.line(arr_counts, x='A_Hour', y='Total Tests', text='Total Tests', color='A_Date', markers=True, color_discrete_sequence=LAB_COLORS, title="Hourly Total Volume of Arriving Tests")
+                fig_arr.update_traces(textposition="top center")
+                fig_arr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1, range=[0, 23]))
+                st.plotly_chart(fig_arr, use_container_width=True)
+                export_figs["Hourly Arrival Pattern"] = fig_arr
+            else: st.info("No arrival data available for analysis.")
+        else: st.info("Arrived_Date_Time column is missing.")
 
         st.markdown("---")
         st.subheader("🔀 Sample Routing & Consolidation")
         
-        route_df = df.dropna(subset=['AU_Class', 'Sample_ID']).copy()
-        route_df = route_df[route_df['AU_Class'] != "Unknown"]
-        
-        if not route_df.empty:
-            def categorize_module(mod):
-                m = str(mod).lower()
-                if 'c 3' in m or 'c 5' in m or 'c 7' in m or 'ise' in m: return 'Chemistry'
-                if 'e 4' in m or 'e 8' in m: return 'Immunology'
-                return 'Other'
-            
-            route_df['Route_Cat'] = route_df['AU_Class'].apply(categorize_module)
-            route_df = route_df[route_df['Route_Cat'].isin(['Chemistry', 'Immunology'])]
+        if 'AU_Class' in df.columns and 'Sample_ID' in df.columns:
+            route_df = df.dropna(subset=['AU_Class', 'Sample_ID']).copy()
+            route_df = route_df[route_df['AU_Class'] != "Unknown"]
             
             if not route_df.empty:
-                sample_mix = route_df.groupby('Sample_ID')['Route_Cat'].unique()
+                def categorize_module(mod):
+                    m = str(mod).lower()
+                    if 'c 3' in m or 'c 5' in m or 'c 7' in m or 'ise' in m: return 'Chemistry'
+                    if 'e 4' in m or 'e 8' in m: return 'Immunology'
+                    return 'Other'
                 
-                def get_mix_type(cats):
-                    c_list = list(cats)
-                    if 'Chemistry' in c_list and 'Immunology' in c_list: return 'Both (Chem & Immuno)'
-                    if 'Chemistry' in c_list: return 'Chemistry Only'
-                    if 'Immunology' in c_list: return 'Immunology Only'
-                    return 'Unknown'
+                route_df['Route_Cat'] = route_df['AU_Class'].apply(categorize_module)
+                route_df = route_df[route_df['Route_Cat'].isin(['Chemistry', 'Immunology'])]
+                
+                if not route_df.empty:
+                    sample_mix = route_df.groupby('Sample_ID')['Route_Cat'].unique()
                     
-                mix_counts = sample_mix.apply(get_mix_type).value_counts().reset_index()
-                mix_counts.columns = ['Routing', 'Tubes (Samples)']
-                
-                colA, colB = st.columns([1, 2])
-                with colA:
-                    st.dataframe(mix_counts, use_container_width=True)
-                with colB:
-                    fig_mix = px.pie(mix_counts, values='Tubes (Samples)', names='Routing', hole=0.4, 
-                                     title="Sample Consolidation (Chem vs. IA)",
-                                     color_discrete_sequence=['#0b41cd', '#009688', '#ff9800'])
-                    st.plotly_chart(fig_mix, use_container_width=True)
-                    export_figs["Sample Routing"] = fig_mix
+                    def get_mix_type(cats):
+                        c_list = list(cats)
+                        if 'Chemistry' in c_list and 'Immunology' in c_list: return 'Both (Chem & Immuno)'
+                        if 'Chemistry' in c_list: return 'Chemistry Only'
+                        if 'Immunology' in c_list: return 'Immunology Only'
+                        return 'Unknown'
+                        
+                    mix_counts = sample_mix.apply(get_mix_type).value_counts().reset_index()
+                    mix_counts.columns = ['Routing', 'Tubes (Samples)']
+                    
+                    colA, colB = st.columns([1, 2])
+                    with colA:
+                        st.dataframe(mix_counts, use_container_width=True)
+                    with colB:
+                        fig_mix = px.pie(mix_counts, values='Tubes (Samples)', names='Routing', hole=0.4, 
+                                         title="Sample Consolidation (Chem vs. IA)",
+                                         color_discrete_sequence=['#0b41cd', '#009688', '#ff9800'])
+                        st.plotly_chart(fig_mix, use_container_width=True)
+                        export_figs["Sample Routing"] = fig_mix
+                else:
+                    st.info("No Chemistry or Immunology routing data available to summarize.")
             else:
-                st.info("No Chemistry or Immunology routing data available to summarize.")
+                st.info("No routing data available.")
         else:
-            st.info("No routing data available.")
+            st.info("Missing 'AU_Class' or 'Sample_ID' required for Routing & Consolidation.")
 
     with t[2]:
         st.subheader("QC Precision & Stability")
-        q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
-        if not q_df.empty:
-            q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
-            fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', color_discrete_sequence=LAB_COLORS, title="QC Timing Matrix (24h)")
-            st.plotly_chart(fig_qc, use_container_width=True)
-            export_figs["QC Timing Matrix"] = fig_qc
-            
-            qc_stats = q_df.groupby(['Parameter', 'Sample_ID'])['Result_Numeric'].agg(Mean='mean', SD='std').reset_index()
-            qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2)
-            st.dataframe(qc_stats, use_container_width=True)
-            
-            c1, c2 = st.columns(2)
-            with c1: 
-                fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|703|ISE", case=False, na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="Chemistry Stability")
-                st.plotly_chart(fig_chem, use_container_width=True)
-                export_figs["Chemistry QC Stability"] = fig_chem
-            with c2: 
-                fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", case=False, na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="IA Stability")
-                st.plotly_chart(fig_ia, use_container_width=True)
-                export_figs["Immunoassay QC Stability"] = fig_ia
-            
-            bad_cv_df = qc_stats[qc_stats['CV%'] > 5]
-            if not bad_cv_df.empty:
-                bad_assays = ", ".join(bad_cv_df['Parameter'].unique())
-                render_insight("QC Drift Detection", f"The following assays exceed 5% CV: **{bad_assays}**", "Indicates precision issues, reagent instability, or probe wear.", f"Recalibrate or perform probe maintenance on {bad_assays}.", "warning")
+        if 'Discrimination' in df.columns:
+            q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
+            if not q_df.empty and 'Arrived_Date_Time' in q_df.columns and 'Parameter' in q_df.columns and 'Result_Numeric' in q_df.columns:
+                q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
+                fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', color_discrete_sequence=LAB_COLORS, title="QC Timing Matrix (24h)")
+                st.plotly_chart(fig_qc, use_container_width=True)
+                export_figs["QC Timing Matrix"] = fig_qc
+                
+                if 'Sample_ID' in q_df.columns:
+                    qc_stats = q_df.groupby(['Parameter', 'Sample_ID'])['Result_Numeric'].agg(Mean='mean', SD='std').reset_index()
+                    qc_stats['CV%'] = ((qc_stats['SD'] / qc_stats['Mean']) * 100).round(2)
+                    st.dataframe(qc_stats, use_container_width=True)
+                    
+                    c1, c2 = st.columns(2)
+                    if 'AU_Class' in q_df.columns:
+                        with c1: 
+                            fig_chem = px.box(q_df[q_df['AU_Class'].str.contains("303|503|703|ISE", case=False, na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="Chemistry Stability")
+                            st.plotly_chart(fig_chem, use_container_width=True)
+                            export_figs["Chemistry QC Stability"] = fig_chem
+                        with c2: 
+                            fig_ia = px.box(q_df[q_df['AU_Class'].str.contains("402|801", case=False, na=False)], x='Parameter', y='Result_Numeric', color='Parameter', color_discrete_sequence=LAB_COLORS, title="IA Stability")
+                            st.plotly_chart(fig_ia, use_container_width=True)
+                            export_figs["Immunoassay QC Stability"] = fig_ia
+                    
+                    bad_cv_df = qc_stats[qc_stats['CV%'] > 5]
+                    if not bad_cv_df.empty:
+                        bad_assays = ", ".join(bad_cv_df['Parameter'].unique())
+                        render_insight("QC Drift Detection", f"The following assays exceed 5% CV: **{bad_assays}**", "Indicates precision issues, reagent instability, or probe wear.", f"Recalibrate or perform probe maintenance on {bad_assays}.", "warning")
+                    else:
+                        render_insight("QC Status", "All parameters show stable CV% below 5%.", "Precision is within optimal technical limits.", "No action needed.", "success")
             else:
-                render_insight("QC Status", "All parameters show stable CV% below 5%.", "Precision is within optimal technical limits.", "No action needed.", "success")
+                st.info("No valid QC data found.")
         else:
-            st.info("No QC data found.")
+            st.info("Discrimination column is missing.")
 
     with t[3]:
         st.subheader("Rerun & Yield Analysis")
-        r_counts = df['Run'].value_counts()
-        if not r_counts.empty:
-            fig_pie = px.pie(values=r_counts.values, names=r_counts.index, hole=0.5, color_discrete_map={'1st run': '#0b41cd', 'Rerun': '#f44336'}, title="First-Pass Yield vs Reruns")
-            fig_pie.update_traces(textinfo='percent+value+label', textposition='inside')
-            st.plotly_chart(fig_pie, use_container_width=True)
-            export_figs["First-Pass Yield Ratio"] = fig_pie
-            
-            rerun_only = df[df['Run'] == 'Rerun']
-            rerun_rate = (len(rerun_only) / len(df)) * 100 if len(df) > 0 else 0
-            
-            if not rerun_only.empty:
-                rerun_df = rerun_only.groupby('Parameter').size().reset_index(name='Count').sort_values('Count', ascending=False)
-                fig_r_bar = px.bar(rerun_df, x='Parameter', y='Count', text='Count', title="Top Rerun Assays", color_discrete_sequence=['#f44336'])
-                fig_r_bar.update_traces(textposition='auto')
-                st.plotly_chart(fig_r_bar, use_container_width=True)
-                export_figs["Top Rerun Assays"] = fig_r_bar
+        if 'Run' in df.columns:
+            r_counts = df['Run'].value_counts()
+            if not r_counts.empty:
+                fig_pie = px.pie(values=r_counts.values, names=r_counts.index, hole=0.5, color_discrete_map={'1st run': '#0b41cd', 'Rerun': '#f44336'}, title="First-Pass Yield vs Reruns")
+                fig_pie.update_traces(textinfo='percent+value+label', textposition='inside')
+                st.plotly_chart(fig_pie, use_container_width=True)
+                export_figs["First-Pass Yield Ratio"] = fig_pie
                 
-                top_assay = rerun_df.iloc[0]['Parameter']
-                if rerun_rate < 2.0:
-                    render_insight("System Yield", f"Excellent First-Pass Yield. Rerun rate is {rerun_rate:.1f}%.", "Reagent waste and TAT delays are minimal.", "System is performing optimally.", "success")
-                elif rerun_rate <= 5.0:
-                    render_insight("Yield Efficiency Warning", f"Elevated Rerun Rate at {rerun_rate:.1f}%.", "Reruns are increasing reagent costs and TAT.", f"Investigate '{top_assay}' for frequent errors.", "warning")
+                rerun_only = df[df['Run'] == 'Rerun']
+                rerun_rate = (len(rerun_only) / len(df)) * 100 if len(df) > 0 else 0
+                
+                if not rerun_only.empty and 'Parameter' in rerun_only.columns:
+                    rerun_df = rerun_only.groupby('Parameter').size().reset_index(name='Count').sort_values('Count', ascending=False)
+                    fig_r_bar = px.bar(rerun_df, x='Parameter', y='Count', text='Count', title="Top Rerun Assays", color_discrete_sequence=['#f44336'])
+                    fig_r_bar.update_traces(textposition='auto')
+                    st.plotly_chart(fig_r_bar, use_container_width=True)
+                    export_figs["Top Rerun Assays"] = fig_r_bar
+                    
+                    top_assay = rerun_df.iloc[0]['Parameter']
+                    if rerun_rate < 2.0:
+                        render_insight("System Yield", f"Excellent First-Pass Yield. Rerun rate is {rerun_rate:.1f}%.", "Reagent waste and TAT delays are minimal.", "System is performing optimally.", "success")
+                    elif rerun_rate <= 5.0:
+                        render_insight("Yield Efficiency Warning", f"Elevated Rerun Rate at {rerun_rate:.1f}%.", "Reruns are increasing reagent costs and TAT.", f"Investigate '{top_assay}' for frequent errors.", "warning")
+                    else:
+                        render_insight("Yield Efficiency Critical", f"Severe Yield Bleed. Rerun rate is {rerun_rate:.1f}%.", "Reruns are doubling reagent costs and significantly delaying TAT.", f"Immediate audit of '{top_assay}' required.", "critical")
                 else:
-                    render_insight("Yield Efficiency Critical", f"Severe Yield Bleed. Rerun rate is {rerun_rate:.1f}%.", "Reruns are doubling reagent costs and significantly delaying TAT.", f"Immediate audit of '{top_assay}' required.", "critical")
-            else:
-                render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "System is performing optimally.", "success")
-        else: st.info("No run data found.")
+                    render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "System is performing optimally.", "success")
+            else: st.info("No run data found.")
+        else: st.info("Run column is missing.")
 
     with t[4]:
         st.subheader("Analytical Risk & Error Intelligence")
         
-        err_df = df[df['Alarm_Type'] != "None"].copy()
-        err_df['Module'] = err_df['Module'].apply(lambda x: "System (Calculated)" if pd.isna(x) or str(x).strip() == "" else str(x).strip())
-        
-        if not err_df.empty:
-            type_counts = err_df['Alarm_Type'].value_counts().reset_index(name='Count')
-            fig_type = px.pie(type_counts, values='Count', names='Alarm_Type', hole=0.4, title="Overall Lab Error Profile", color_discrete_sequence=LAB_COLORS)
-            st.plotly_chart(fig_type, use_container_width=True)
-            export_figs["Error Profile"] = fig_type
-
-            err_bar = px.bar(err_df.groupby(['Module', 'Alarm_Code']).size().reset_index(name='C').sort_values('C', ascending=False).head(25), x='Alarm_Code', y='C', text='C', color='Module', color_discrete_sequence=LAB_COLORS, title="Top 25 System Alarms Triggered")
-            err_bar.update_traces(textposition='auto')
-            st.plotly_chart(err_bar, use_container_width=True)
-            export_figs["System Alarms"] = err_bar
+        if 'Alarm_Type' in df.columns and 'Module' in df.columns and 'Alarm_Code' in df.columns:
+            err_df = df[df['Alarm_Type'] != "None"].copy()
+            err_df['Module'] = err_df['Module'].apply(lambda x: "System (Calculated)" if pd.isna(x) or str(x).strip() == "" else str(x).strip())
             
-            pre_ana = err_df[err_df['Alarm_Type'] == 'Pre-Analytical']
-            if not pre_ana.empty:
-                top_pre = pre_ana['Alarm_Code'].value_counts().idxmax()
-                render_insight("Pre-Analytical Bleed", f"Detected {len(pre_ana)} pre-analytical errors (Top: {top_pre}).", "Issues like Clots, Shorts, and HIL interferences lead to immediate probe damage or unreportable results.", "Audit centrifuge protocols and phlebotomy draw volumes.", "critical")
-            
-            reag_err = err_df[err_df['Alarm_Type'] == 'Reagent']
-            if not reag_err.empty:
-                render_insight("Reagent Management", f"Detected {len(reag_err)} Reagent/OBS flags.", "Using expired reagents or running low during peak hours halts the track.", "Review inventory and On-Board Stability (OBS) limits.", "warning")
+            if not err_df.empty:
+                type_counts = err_df['Alarm_Type'].value_counts().reset_index(name='Count')
+                fig_type = px.pie(type_counts, values='Count', names='Alarm_Type', hole=0.4, title="Overall Lab Error Profile", color_discrete_sequence=LAB_COLORS)
+                st.plotly_chart(fig_type, use_container_width=True)
+                export_figs["Error Profile"] = fig_type
 
-            cal_err = err_df[err_df['Alarm_Type'] == 'Calibration']
-            if not cal_err.empty:
-                render_insight("Calibration Instability", f"Detected {len(cal_err)} Calibration failures.", "Failed calibrations prevent patient sample processing.", "Check calibrator lot expiry and reconstitution.", "critical")
+                err_bar = px.bar(err_df.groupby(['Module', 'Alarm_Code']).size().reset_index(name='C').sort_values('C', ascending=False).head(25), x='Alarm_Code', y='C', text='C', color='Module', color_discrete_sequence=LAB_COLORS, title="Top 25 System Alarms Triggered")
+                err_bar.update_traces(textposition='auto')
+                st.plotly_chart(err_bar, use_container_width=True)
+                export_figs["System Alarms"] = err_bar
+                
+                pre_ana = err_df[err_df['Alarm_Type'] == 'Pre-Analytical']
+                if not pre_ana.empty:
+                    top_pre = pre_ana['Alarm_Code'].value_counts().idxmax()
+                    render_insight("Pre-Analytical Bleed", f"Detected {len(pre_ana)} pre-analytical errors (Top: {top_pre}).", "Issues like Clots, Shorts, and HIL interferences lead to immediate probe damage or unreportable results.", "Audit centrifuge protocols and phlebotomy draw volumes.", "critical")
+                
+                reag_err = err_df[err_df['Alarm_Type'] == 'Reagent']
+                if not reag_err.empty:
+                    render_insight("Reagent Management", f"Detected {len(reag_err)} Reagent/OBS flags.", "Using expired reagents or running low during peak hours halts the track.", "Review inventory and On-Board Stability (OBS) limits.", "warning")
 
-            if pre_ana.empty and reag_err.empty and cal_err.empty:
-                render_insight("System Health", "Minor analytical warnings detected.", "No critical operational halt alarms.", "Review reaction curves if >Reac alarms persist.", "info")
+                cal_err = err_df[err_df['Alarm_Type'] == 'Calibration']
+                if not cal_err.empty:
+                    render_insight("Calibration Instability", f"Detected {len(cal_err)} Calibration failures.", "Failed calibrations prevent patient sample processing.", "Check calibrator lot expiry and reconstitution.", "critical")
 
-        else:
-            render_insight("Alarm Status", "Zero flags detected.", "Results are analytically clean.", "Continue standard monitoring.", "success")
+                if pre_ana.empty and reag_err.empty and cal_err.empty:
+                    render_insight("System Health", "Minor analytical warnings detected.", "No critical operational halt alarms.", "Review reaction curves if >Reac alarms persist.", "info")
+
+            else:
+                render_insight("Alarm Status", "Zero flags detected.", "Results are analytically clean.", "Continue standard monitoring.", "success")
+        else: st.info("Alarm tracking columns are missing.")
 
     with t[5]:
         st.subheader("Sub-Module Load Balancing")
         
-        load_df = df.dropna(subset=['AU_Class', 'AU_SubUnit']).copy()
-        load_df = load_df[load_df['AU_SubUnit'] != "Unknown"]
-        
-        if not load_df.empty:
+        if 'AU_Class' in df.columns and 'AU_SubUnit' in df.columns and 'AU_Module' in df.columns:
+            load_df = df.dropna(subset=['AU_Class', 'AU_SubUnit']).copy()
+            load_df = load_df[load_df['AU_SubUnit'] != "Unknown"]
             
-            st.markdown("##### 🗄️ Workload Distribution by Module")
-            module_list = load_df['AU_Module'].unique()
-            cols = st.columns(len(module_list) if len(module_list) > 0 else 1)
-            
-            for i, mod in enumerate(sorted(module_list)):
-                mod_df = load_df[load_df['AU_Module'] == mod]
-                total_workload = len(mod_df)
+            if not load_df.empty:
+                st.markdown("##### 🗄️ Workload Distribution by Module")
+                module_list = load_df['AU_Module'].unique()
+                cols = st.columns(len(module_list) if len(module_list) > 0 else 1)
                 
-                sub_workloads = mod_df['AU_SubUnit'].value_counts().sort_index()
-                sub_text = "".join([f"<br><span style='color:#555;'>{sub} - Workload: <strong style='color:#0b41cd;'>{count}</strong></span>" for sub, count in sub_workloads.items()])
-                
-                with cols[i % len(cols)]:
-                    st.markdown(f"""
-                    <div style="border: 1px solid #cce0ff; border-radius: 8px; padding: 15px; background: white; margin-bottom: 20px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);">
-                        <h4 style="margin: 0; color: #0b41cd; font-family: 'Open Sans', sans-serif;">{mod}</h4>
-                        <p style="margin: 5px 0 0 0; font-size: 15px;">Total Workload: <strong>{total_workload}</strong></p>
-                        <div style="font-size: 14px; margin-top: 10px; border-top: 1px solid #eee; padding-top: 5px;">
-                            {sub_text}
+                for i, mod in enumerate(sorted(module_list)):
+                    mod_df = load_df[load_df['AU_Module'] == mod]
+                    total_workload = len(mod_df)
+                    
+                    sub_workloads = mod_df['AU_SubUnit'].value_counts().sort_index()
+                    sub_text = "".join([f"<br><span style='color:#555;'>{sub} - Workload: <strong style='color:#0b41cd;'>{count}</strong></span>" for sub, count in sub_workloads.items()])
+                    
+                    with cols[i % len(cols)]:
+                        st.markdown(f"""
+                        <div style="border: 1px solid #cce0ff; border-radius: 8px; padding: 15px; background: white; margin-bottom: 20px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);">
+                            <h4 style="margin: 0; color: #0b41cd; font-family: 'Open Sans', sans-serif;">{mod}</h4>
+                            <p style="margin: 5px 0 0 0; font-size: 15px;">Total Workload: <strong>{total_workload}</strong></p>
+                            <div style="font-size: 14px; margin-top: 10px; border-top: 1px solid #eee; padding-top: 5px;">
+                                {sub_text}
+                            </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            
-            st.markdown("---")
-            
-            st.markdown("##### 📋 Assay to Sub-Module Mapping")
-            
-            mapping_df = load_df.copy()
-            totals = mapping_df.groupby(['Parameter', 'ACN code']).size().reset_index(name='Total')
-            pivot = mapping_df.pivot_table(index=['Parameter', 'ACN code'], columns='AU_SubUnit', aggfunc='size', fill_value=0)
-            
-            for col in pivot.columns:
-                pivot[col] = pivot[col].apply(lambda x: '✓' if x > 0 else '')
+                        """, unsafe_allow_html=True)
                 
-            pivot = pivot.reset_index()
-            final_table = pd.merge(totals, pivot, on=['Parameter', 'ACN code'])
-            final_table['Type'] = "" 
-            
-            sub_modules = [c for c in final_table.columns if c not in ['Parameter', 'ACN code', 'Total', 'Type']]
-            final_table = final_table[['Parameter', 'ACN code', 'Total', 'Type'] + sorted(sub_modules)]
-            final_table = final_table.rename(columns={'Parameter': 'Test name', 'ACN code': 'ACN'})
-            final_table = final_table.sort_values('Total', ascending=False).reset_index(drop=True)
-            
-            # --- THE FIX: Custom CSS highlighter (no matplotlib required) ---
-            def highlight_ticks(val):
-                return 'background-color: #d4edda; color: #155724; font-weight: bold;' if val == '✓' else ''
-            
-            try:
-                styled_table = final_table.style.map(highlight_ticks, subset=sub_modules)
-            except AttributeError:
-                styled_table = final_table.style.applymap(highlight_ticks, subset=sub_modules)
-            
-            st.dataframe(styled_table, use_container_width=True)
+                st.markdown("---")
+                st.markdown("##### 📋 Assay to Sub-Module Mapping")
+                
+                if 'Parameter' in load_df.columns and 'ACN code' in load_df.columns:
+                    mapping_df = load_df.copy()
+                    totals = mapping_df.groupby(['Parameter', 'ACN code']).size().reset_index(name='Total')
+                    pivot = mapping_df.pivot_table(index=['Parameter', 'ACN code'], columns='AU_SubUnit', aggfunc='size', fill_value=0)
+                    
+                    for col in pivot.columns:
+                        pivot[col] = pivot[col].apply(lambda x: '✓' if x > 0 else '')
+                        
+                    pivot = pivot.reset_index()
+                    final_table = pd.merge(totals, pivot, on=['Parameter', 'ACN code'])
+                    final_table['Type'] = "" 
+                    
+                    sub_modules = [c for c in final_table.columns if c not in ['Parameter', 'ACN code', 'Total', 'Type']]
+                    final_table = final_table[['Parameter', 'ACN code', 'Total', 'Type'] + sorted(sub_modules)]
+                    final_table = final_table.rename(columns={'Parameter': 'Test name', 'ACN code': 'ACN'})
+                    final_table = final_table.sort_values('Total', ascending=False).reset_index(drop=True)
+                    
+                    def highlight_ticks(val):
+                        return 'background-color: #d4edda; color: #155724; font-weight: bold;' if val == '✓' else ''
+                    
+                    try:
+                        styled_table = final_table.style.map(highlight_ticks, subset=sub_modules)
+                    except AttributeError:
+                        styled_table = final_table.style.applymap(highlight_ticks, subset=sub_modules)
+                    
+                    st.dataframe(styled_table, use_container_width=True)
+                else:
+                    st.info("Parameter or ACN code column missing for table generation.")
 
-        else: 
-            st.info("No physical module load data found.")
-
+            else: 
+                st.info("No physical module load data found.")
+        else:
+            st.info("Required module identification columns are missing.")
 else:
     st.info("👈 Upload a CSV to begin.")
