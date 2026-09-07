@@ -141,22 +141,47 @@ def process_data(file_bytes):
         df['Sampling_Date_Time'] = pd.to_datetime(df['Sampling_Date_Time'], errors='coerce')
         df['Result_Numeric'] = pd.to_numeric(df['Result'], errors='coerce')
 
-        def parse_au(au_str):
+        def parse_raw_au(au_str):
             if pd.isna(au_str) or str(au_str).strip() in ["", "System (Calculated)", "Unknown", "nan"]: 
-                return "N/A", "Unknown", "Unknown", "Unknown"
+                return "", "Unknown", "Unknown", "Unknown"
             
             au_str = str(au_str).strip()
             match = re.match(r'(?:(\d+)-)?([a-zA-Z]+\s*\d*|-?ISE|-?EFLW)(?:-(.+))?', au_str)
             
             if match:
-                line = match.group(1) if match.group(1) else "1"
+                line = match.group(1) if match.group(1) else ""
                 mtype = match.group(2).strip('- ').strip()
                 sub = match.group(3) if match.group(3) else "0"
-                return line, mtype, f"{line}-{mtype}-{sub}", f"{line}-{mtype}"
+                
+                full_sub = f"{line}-{mtype}-{sub}" if line else f"{mtype}-{sub}"
+                full_mod = f"{line}-{mtype}" if line else mtype
+                return line, mtype, full_sub, full_mod
             else:
-                return "1", au_str, f"1-{au_str}-0", f"1-{au_str}"
+                return "", au_str, f"{au_str}-0", au_str
 
-        df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = df['Module'].apply(lambda x: pd.Series(parse_au(x)))
+        df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = df['Module'].apply(lambda x: pd.Series(parse_raw_au(x)))
+        
+        # --- NEW FEATURE: Infer missing line prefixes based on sample context (fixes standalone 'e 801' blocks) ---
+        def infer_missing_prefix(group):
+            prefix_map = {}
+            for _, row in group.iterrows():
+                if row['AU_Pos'] != "" and row['AU_Class'] != "Unknown":
+                    if row['AU_Class'] not in prefix_map:
+                        prefix_map[row['AU_Class']] = row['AU_Pos']
+            
+            for idx, row in group.iterrows():
+                if row['AU_Pos'] == "" and row['AU_Class'] in prefix_map:
+                    inf_line = prefix_map[row['AU_Class']]
+                    group.at[idx, 'AU_Pos'] = inf_line
+                    group.at[idx, 'AU_Module'] = f"{inf_line}-{row['AU_Class']}"
+                    
+                    sub = row['AU_SubUnit'].split('-')[-1]
+                    group.at[idx, 'AU_SubUnit'] = f"{inf_line}-{row['AU_Class']}-{sub}"
+            return group
+
+        # Apply the routing inference logic to merge prefix-less tests (like e 801-0) back to their respective physical line
+        if 'Sample_ID' in df.columns:
+            df = df.groupby('Sample_ID', group_keys=False).apply(infer_missing_prefix)
         
         def map_alarm_type(c):
             if pd.isna(c): return "None"
@@ -218,7 +243,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v10.0\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v10.1\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -458,7 +483,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
         
         if not load_df.empty:
             
-            # --- 1. NEW COMPONENT: Module Workload Cards (Matches top of screenshot) ---
             st.markdown("##### 🗄️ Workload Distribution by Module")
             module_list = load_df['AU_Module'].unique()
             cols = st.columns(len(module_list) if len(module_list) > 0 else 1)
@@ -467,7 +491,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
                 mod_df = load_df[load_df['AU_Module'] == mod]
                 total_workload = len(mod_df)
                 
-                # Breakdown of sub-units (e.g. MC1, MC2)
                 sub_workloads = mod_df['AU_SubUnit'].value_counts().sort_index()
                 sub_text = "".join([f"<br><span style='color:#555;'>{sub} - Workload: <strong style='color:#0b41cd;'>{count}</strong></span>" for sub, count in sub_workloads.items()])
                 
@@ -484,36 +507,34 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None:
             
             st.markdown("---")
             
-            # --- 2. NEW COMPONENT: Assay to Sub-Module Mapping Table (Matches bottom of screenshot) ---
             st.markdown("##### 📋 Assay to Sub-Module Mapping")
             
-            # Group exactly like the screenshot: Test name | ACN | Total | Type | [Sub-modules...]
             mapping_df = load_df.copy()
-            
-            # Calculate Totals
             totals = mapping_df.groupby(['Parameter', 'ACN code']).size().reset_index(name='Total')
-            
-            # Pivot table to check presence in specific Measuring Cells/Sub-units
             pivot = mapping_df.pivot_table(index=['Parameter', 'ACN code'], columns='AU_SubUnit', aggfunc='size', fill_value=0)
             
-            # Convert numbers to "✓" for an exact visual match with the screenshot
             for col in pivot.columns:
                 pivot[col] = pivot[col].apply(lambda x: '✓' if x > 0 else '')
                 
             pivot = pivot.reset_index()
-            
-            # Merge and arrange columns to match screenshot UI
             final_table = pd.merge(totals, pivot, on=['Parameter', 'ACN code'])
-            final_table['Type'] = "" # Blank column to match screenshot layout exactly
+            final_table['Type'] = "" 
             
             sub_modules = [c for c in final_table.columns if c not in ['Parameter', 'ACN code', 'Total', 'Type']]
             final_table = final_table[['Parameter', 'ACN code', 'Total', 'Type'] + sorted(sub_modules)]
             final_table = final_table.rename(columns={'Parameter': 'Test name', 'ACN code': 'ACN'})
-            
-            # Sort by total volume descending
             final_table = final_table.sort_values('Total', ascending=False).reset_index(drop=True)
             
-            st.dataframe(final_table, use_container_width=True)
+            # --- THE FIX: Custom CSS highlighter (no matplotlib required) ---
+            def highlight_ticks(val):
+                return 'background-color: #d4edda; color: #155724; font-weight: bold;' if val == '✓' else ''
+            
+            try:
+                styled_table = final_table.style.map(highlight_ticks, subset=sub_modules)
+            except AttributeError:
+                styled_table = final_table.style.applymap(highlight_ticks, subset=sub_modules)
+            
+            st.dataframe(styled_table, use_container_width=True)
 
         else: 
             st.info("No physical module load data found.")
