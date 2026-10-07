@@ -178,12 +178,9 @@ def process_data(file_bytes):
         else:
             df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = pd.DataFrame([["", "Unknown", "Unknown", "Unknown"]] * len(df), index=df.index)
 
-        # --- FIX: Replaced groupby.apply with a safe Dictionary Map to protect Sample_ID ---
         if 'Sample_ID' in df.columns and 'AU_Class' in df.columns and 'AU_Pos' in df.columns:
             valid_pos = df[df['AU_Pos'] != ""]
-            
             if not valid_pos.empty:
-                # Map physical line numbers to samples/classes
                 pos_map = valid_pos.set_index(['Sample_ID', 'AU_Class'])['AU_Pos'].to_dict()
                 
                 def apply_inferred_routing(row):
@@ -267,7 +264,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v10.4\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v10.5\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -290,10 +287,9 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.
             if 'Comment' in col:
                 df[col] = df[col].apply(lambda x: "[REDACTED]" if pd.notna(x) and str(x).strip() != "" else x)
 
-    t = st.tabs(["📄 Raw Data", "📊 Throughput", "🧪 Quality Control", "🔄 Reruns", "⚠️ Alarms & Risk", "⚙️ Hardware Load"])
+    t = st.tabs(["📄 Raw Data", "📊 Throughput", "🧪 Quality Control", "🔄 Reruns", "⚠️ Alarms & Risk", "⚙️ Hardware Load", "🩸 Pre-Analytical & ISE Health"])
     
     with t[0]:
-        # Enforcing reset_index to guarantee clean rendering without Pandas index clipping
         st.dataframe(df.reset_index(drop=True), use_container_width=True)
         st.download_button("📥 Export CSV", df.to_csv(index=False), f"Enriched_{uploaded_file.name}")
 
@@ -587,5 +583,76 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.
                 st.info("No physical module load data found.")
         else:
             st.info("Required module identification columns are missing.")
+
+    # --- TAB 7: Pre-Analytical & ISE Health ---
+    with t[6]:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("💧 Sample Volume Profiling")
+            if 'Sample_Volume' in df.columns and 'Sample_ID' in df.columns:
+                df['Sample_Volume_Num'] = pd.to_numeric(df['Sample_Volume'], errors='coerce').fillna(0)
+                
+                vol_df = df.groupby('Sample_ID')['Sample_Volume_Num'].sum().reset_index()
+                vol_df = vol_df[vol_df['Sample_Volume_Num'] > 0]
+                
+                if not vol_df.empty:
+                    top_thirsty = vol_df.sort_values('Sample_Volume_Num', ascending=False).head(15)
+                    fig_vol = px.bar(top_thirsty, x='Sample_ID', y='Sample_Volume_Num', 
+                                     title="Top 15 'Thirsty' Tubes (Total Aspiration Vol)",
+                                     labels={'Sample_Volume_Num': 'Total Volume', 'Sample_ID': 'Patient/QC ID'},
+                                     color='Sample_Volume_Num', color_continuous_scale='Blues')
+                    st.plotly_chart(fig_vol, use_container_width=True)
+                    export_figs["Sample Volume Profiler"] = fig_vol
+                    
+                    if 'Data_Alarm' in df.columns and 'Parameter' in df.columns:
+                        short_df = df[df['Data_Alarm'].str.contains('Samp.S|Samp.C', na=False, case=False)]
+                        if not short_df.empty:
+                            short_counts = short_df['Parameter'].value_counts().reset_index()
+                            short_counts.columns = ['Assay', 'Short/Clot Count']
+                            
+                            st.markdown("##### ⚠️ High-Risk Assays (Short Sample / Clot Triggers)")
+                            st.dataframe(short_counts, use_container_width=True)
+                            
+                            top_short = short_counts.iloc[0]['Assay']
+                            render_insight("Primary Draw Volume Adjustment", f"'{top_short}' is the most frequent trigger for Short Sample or Clot alarms.", "The current minimum draw volume for this specific panel may be too low, draining the tube completely and halting the probe.", "Audit primary tube draw volumes for this specific panel.", "warning")
+                        else:
+                            st.info("No 'Short Sample' or 'Clot' alarms detected in this dataset.")
+                else:
+                    st.info("No numerical sample volume data detected.")
+            else:
+                st.info("Required columns (Sample_Volume, Sample_ID) missing.")
+                
+        with col2:
+            st.subheader("⚡ Predictive ISE Electrode Drift")
+            if 'EMF1' in df.columns and 'Module' in df.columns and 'Sampling_Date_Time' in df.columns:
+                ise_df = df[df['Module'].str.contains('ISE', na=False, case=False)].copy()
+                
+                if not ise_df.empty:
+                    ise_df['Sampling_Date_Time'] = pd.to_datetime(ise_df['Sampling_Date_Time'], errors='coerce')
+                    ise_df['EMF1_Num'] = pd.to_numeric(ise_df['EMF1'], errors='coerce')
+                    ise_df['EMF2_Num'] = pd.to_numeric(ise_df['EMF2'], errors='coerce')
+                    ise_df['EMF3_Num'] = pd.to_numeric(ise_df['EMF3'], errors='coerce')
+                    
+                    ise_clean = ise_df.dropna(subset=['Sampling_Date_Time', 'EMF1_Num', 'EMF2_Num', 'EMF3_Num']).sort_values('Sampling_Date_Time')
+                    
+                    if not ise_clean.empty:
+                        fig_emf = go.Figure()
+                        fig_emf.add_trace(go.Scatter(x=ise_clean['Sampling_Date_Time'], y=ise_clean['EMF1_Num'], mode='lines+markers', name='EMF1 (Na)', line=dict(color='#0b41cd')))
+                        fig_emf.add_trace(go.Scatter(x=ise_clean['Sampling_Date_Time'], y=ise_clean['EMF2_Num'], mode='lines+markers', name='EMF2 (K)', line=dict(color='#ff9800')))
+                        fig_emf.add_trace(go.Scatter(x=ise_clean['Sampling_Date_Time'], y=ise_clean['EMF3_Num'], mode='lines+markers', name='EMF3 (Cl)', line=dict(color='#4caf50')))
+                        
+                        fig_emf.update_layout(title="Electromotive Force (EMF) Raw Signal Timeline", xaxis_title="Time of Sampling", yaxis_title="Millivolts (mV)")
+                        st.plotly_chart(fig_emf, use_container_width=True)
+                        export_figs["ISE EMF Drift"] = fig_emf
+                        
+                        render_insight("ISE Signal Health", "EMF values plotted over the operational shift.", "Sharp, continuous drifts in voltage indicate electrode degradation or flow path contamination.", "Monitor for aggressive downward/upward slopes. Prime ISE if noise is visible.", "info")
+                    else:
+                        st.info("Valid numerical EMF data could not be parsed from the ISE module.")
+                else:
+                    st.info("No ISE tests detected in the dataset.")
+            else:
+                st.info("Required columns (EMF1, Module, Sampling_Date_Time) missing.")
+
 else:
     st.info("👈 Upload a CSV to begin.")
