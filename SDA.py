@@ -178,25 +178,25 @@ def process_data(file_bytes):
         else:
             df[['AU_Pos', 'AU_Class', 'AU_SubUnit', 'AU_Module']] = pd.DataFrame([["", "Unknown", "Unknown", "Unknown"]] * len(df), index=df.index)
 
-        def infer_missing_prefix(group):
-            prefix_map = {}
-            for _, row in group.iterrows():
-                if row.get('AU_Pos', '') != "" and row.get('AU_Class', 'Unknown') != "Unknown":
-                    if row['AU_Class'] not in prefix_map:
-                        prefix_map[row['AU_Class']] = row['AU_Pos']
+        # --- FIX: Replaced groupby.apply with a safe Dictionary Map to protect Sample_ID ---
+        if 'Sample_ID' in df.columns and 'AU_Class' in df.columns and 'AU_Pos' in df.columns:
+            valid_pos = df[df['AU_Pos'] != ""]
             
-            for idx, row in group.iterrows():
-                if row.get('AU_Pos', '') == "" and row.get('AU_Class', 'Unknown') in prefix_map:
-                    inf_line = prefix_map[row['AU_Class']]
-                    group.at[idx, 'AU_Pos'] = inf_line
-                    group.at[idx, 'AU_Module'] = f"{inf_line}-{row['AU_Class']}"
-                    sub = row['AU_SubUnit'].split('-')[-1]
-                    group.at[idx, 'AU_SubUnit'] = f"{inf_line}-{row['AU_Class']}-{sub}"
-            return group
+            if not valid_pos.empty:
+                # Map physical line numbers to samples/classes
+                pos_map = valid_pos.set_index(['Sample_ID', 'AU_Class'])['AU_Pos'].to_dict()
+                
+                def apply_inferred_routing(row):
+                    if row['AU_Pos'] == "" and row['AU_Class'] != "Unknown":
+                        key = (row['Sample_ID'], row['AU_Class'])
+                        if key in pos_map:
+                            inf_pos = pos_map[key]
+                            sub = row['AU_SubUnit'].split('-')[-1]
+                            return inf_pos, f"{inf_pos}-{row['AU_Class']}", f"{inf_pos}-{row['AU_Class']}-{sub}"
+                    return row['AU_Pos'], row['AU_Module'], row['AU_SubUnit']
+                
+                df[['AU_Pos', 'AU_Module', 'AU_SubUnit']] = df.apply(lambda r: pd.Series(apply_inferred_routing(r)), axis=1)
 
-        if 'Sample_ID' in df.columns:
-            df = df.groupby('Sample_ID', group_keys=False).apply(infer_missing_prefix)
-        
         def map_alarm_type(c):
             if pd.isna(c): return "None"
             c_str = str(c).strip()
@@ -219,10 +219,8 @@ def process_data(file_bytes):
             df['Alarm_Code'] = ""
             df['Alarm_Type'] = "None"
 
-        # --- REBUILT QC DISCRIMINATION MAPPING ---
         mappings = {
             "Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
-            # Hard map "3" to "QC (Control)" so the QC tab can find the data
             "Discrimination": {"1": "Patient (Routine)", "2": "Patient (STAT)", "3": "QC (Control)", "QC (Control)": "QC (Control)", "QC": "QC (Control)"},
             "Run": {"1": "1st run", "2": "Rerun"}
         }
@@ -269,7 +267,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v10.3\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v10.4\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -295,7 +293,8 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.
     t = st.tabs(["📄 Raw Data", "📊 Throughput", "🧪 Quality Control", "🔄 Reruns", "⚠️ Alarms & Risk", "⚙️ Hardware Load"])
     
     with t[0]:
-        st.dataframe(df, use_container_width=True)
+        # Enforcing reset_index to guarantee clean rendering without Pandas index clipping
+        st.dataframe(df.reset_index(drop=True), use_container_width=True)
         st.download_button("📥 Export CSV", df.to_csv(index=False), f"Enriched_{uploaded_file.name}")
 
     with t[1]:
@@ -417,7 +416,6 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.
     with t[2]:
         st.subheader("QC Precision & Stability")
         if 'Discrimination' in df.columns:
-            # Check specifically for "QC" tests, including mapped "QC (Control)"
             q_df = df[df['Discrimination'].str.contains("QC", case=False, na=False)].copy()
             
             if not q_df.empty and 'Arrived_Date_Time' in q_df.columns and 'Parameter' in q_df.columns and 'Result_Numeric' in q_df.columns:
