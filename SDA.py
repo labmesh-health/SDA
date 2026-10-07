@@ -10,10 +10,13 @@ from pptx import Presentation
 from pptx.util import Inches
 import re
 
+# --- Page Configuration ---
 st.set_page_config(page_title="converterPRO", page_icon="💡", layout="wide")
 
+# --- Custom Professional Color Palette ---
 LAB_COLORS = ['#0b41cd', '#009688', '#ff9800', '#673ab7', '#e91e63', '#00bcd4', '#4caf50', '#ffc107', '#3f51b5', '#795548', '#607d8b', '#f44336']
 
+# --- Comprehensive Clinical Knowledge Base (Roche Pure & Pro) ---
 ALARM_MAP = {
     ">Abs": {"name": "ABS over", "sev": "High", "msg": "Detected foam or air aspiration, or absorbance value exceeded 3.3. Check for sample integrity.", "type": "Analytical", "action": "Check sample for bubbles/foam. Review reaction curve."},
     "ADC.E": {"name": "ADC abnormal", "sev": "Critical", "msg": "The ADC value of the primary or secondary wavelength is zero, or ISE cannot read ADC data.", "type": "Hardware", "action": "Hardware check required. Contact service if persistent."},
@@ -216,9 +219,11 @@ def process_data(file_bytes):
             df['Alarm_Code'] = ""
             df['Alarm_Type'] = "None"
 
+        # --- REBUILT QC DISCRIMINATION MAPPING ---
         mappings = {
             "Gender": {"0": "Not entered", "1": "Male", "2": "Female"},
-            "Discrimination": {"1": "Patient (Routine)", "2": "Patient (STAT)", "3": "QC (Control)"},
+            # Hard map "3" to "QC (Control)" so the QC tab can find the data
+            "Discrimination": {"1": "Patient (Routine)", "2": "Patient (STAT)", "3": "QC (Control)", "QC (Control)": "QC (Control)", "QC": "QC (Control)"},
             "Run": {"1": "1st run", "2": "Rerun"}
         }
         for col in mappings:
@@ -264,7 +269,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("⚙️ **Engine Details**")
-    st.markdown("- **Adaptive Engine:** v10.2\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
+    st.markdown("- **Adaptive Engine:** v10.3\n- **Compatibility:** cobas pro / cobas pure\n- **Status:** Validated")
     st.markdown("---")
     st.markdown("© 2026 **LabMesh.com**")
 
@@ -412,9 +417,12 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.
     with t[2]:
         st.subheader("QC Precision & Stability")
         if 'Discrimination' in df.columns:
-            q_df = df[df['Discrimination'].str.contains("QC", na=False)].copy()
+            # Check specifically for "QC" tests, including mapped "QC (Control)"
+            q_df = df[df['Discrimination'].str.contains("QC", case=False, na=False)].copy()
+            
             if not q_df.empty and 'Arrived_Date_Time' in q_df.columns and 'Parameter' in q_df.columns and 'Result_Numeric' in q_df.columns:
                 q_df['HF'] = q_df['Arrived_Date_Time'].dt.hour + q_df['Arrived_Date_Time'].dt.minute/60
+                
                 fig_qc = px.scatter(q_df, x='HF', y='Parameter', color='Parameter', color_discrete_sequence=LAB_COLORS, title="QC Timing Matrix (24h)")
                 st.plotly_chart(fig_qc, use_container_width=True)
                 export_figs["QC Timing Matrix"] = fig_qc
@@ -442,9 +450,9 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.
                     else:
                         render_insight("QC Status", "All parameters show stable CV% below 5%.", "Precision is within optimal technical limits.", "No action needed.", "success")
             else:
-                st.info("No valid QC data found.")
+                st.info("No valid QC data found. Please verify the 'Discrimination' flag for controls.")
         else:
-            st.info("Discrimination column is missing.")
+            st.info("Discrimination column is missing. Cannot filter for QC data.")
 
     with t[3]:
         st.subheader("Rerun & Yield Analysis")
@@ -473,9 +481,8 @@ if uploaded_file and 'raw_df' in locals() and raw_df is not None and not raw_df.
                         render_insight("Yield Efficiency Warning", f"Elevated Rerun Rate at {rerun_rate:.1f}%.", "Reruns are increasing reagent costs and TAT.", f"Investigate '{top_assay}' for frequent errors.", "warning")
                     else:
                         render_insight("Yield Efficiency Critical", f"Severe Yield Bleed. Rerun rate is {rerun_rate:.1f}%.", "Reruns are doubling reagent costs and significantly delaying TAT.", f"Immediate audit of '{top_assay}' required.", "critical")
-                else:
-                    render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "System is performing optimally.", "success")
-            else: st.info("No run data found.")
+            else:
+                render_insight("System Yield", "100% First-Pass Yield.", "Reagent waste is zero.", "System is performing optimally.", "success")
         else: st.info("Run column is missing.")
 
     with t[4]:
